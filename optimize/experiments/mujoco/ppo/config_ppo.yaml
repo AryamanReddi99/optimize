@@ -1,0 +1,27 @@
+total_timesteps: 1e7
+num_envs: 64
+num_steps: 128
+"lr": 0.004
+"optimizer": "adam" # adam, rmsprop
+"anneal_lr": True
+"update_epochs": 2
+"num_minibatches": 2
+"gamma": 0.99
+"gae_lambda": 0.95
+"clip_eps": 0.2
+"ent_coef": 0.0
+"vf_coef": 0.5
+"max_grad_norm": 0.5
+"activation": "relu"
+"fc_dim_size": 128
+"scale_clip_eps": False
+
+# env
+env_name: "HalfCheetah-v4"
+seed: 0
+num_seeds: 5
+
+# wandb
+project: optimize
+use_timestamp: True
+wandb_mode: "disabled" # online, disabled
