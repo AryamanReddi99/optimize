@@ -7,7 +7,7 @@ import distrax
 
 
 class ActorCritic(nn.Module):
-    action_dim: Sequence[int]
+    action_dim: int
     activation: str = "tanh"
 
     @nn.compact
@@ -16,6 +16,8 @@ class ActorCritic(nn.Module):
             activation = nn.relu
         else:
             activation = nn.tanh
+
+        # Actor network - outputs mean and log_std for continuous actions
         actor_mean = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
@@ -27,8 +29,24 @@ class ActorCritic(nn.Module):
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
-        pi = distrax.Categorical(logits=actor_mean)
 
+        # Log standard deviation for continuous actions
+        actor_log_std = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(x)
+        actor_log_std = activation(actor_log_std)
+        actor_log_std = nn.Dense(
+            64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(actor_log_std)
+        actor_log_std = activation(actor_log_std)
+        actor_log_std = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(actor_log_std)
+
+        # Create Normal distribution for continuous actions
+        pi = distrax.Normal(loc=actor_mean, scale=jnp.exp(actor_log_std))
+
+        # Critic network
         critic = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)

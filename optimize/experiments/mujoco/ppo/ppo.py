@@ -29,6 +29,7 @@ class RunnerState(NamedTuple):
     state: jnp.ndarray
     done: jnp.ndarray
     cumulative_return: jnp.ndarray
+    timesteps: jnp.ndarray  # Track timesteps for each environment
     update_step: int
     rng: Array
 
@@ -103,6 +104,8 @@ def make_train(config):
         state, train_state, network = train_setup(_rng_setup)
 
         def _train_loop(runner_state, unused):
+            initial_timesteps = runner_state.timesteps
+
             # collect transitions
             def _env_step(runner_state, unused):
                 train_state = runner_state.train_state
@@ -122,11 +125,23 @@ def make_train(config):
                 rng, _rng_action = jax.random.split(rng)
                 pi, value = network.apply(train_state.params, state.obs)
                 action = pi.sample(seed=_rng_action)
-                log_prob = pi.log_prob(action)
+                # Clip continuous actions to valid range
+                action = jnp.clip(action, -1.0, 1.0)
+                log_prob = pi.log_prob(action).sum(
+                    axis=-1
+                )  # Sum across action dimensions
 
                 # step the environment
                 rng, _rng = jax.random.split(rng)
                 new_state = jax.vmap(env.step)(state, action)
+
+                # Update timesteps and check horizon
+                timesteps = runner_state.timesteps + 1
+                horizon_done = timesteps >= config["horizon"]
+                new_done = new_state.done | horizon_done
+
+                # Reset timesteps for environments that are done
+                timesteps = jnp.where(new_done, 0, timesteps)
 
                 transition = Transition(  # transitions are batched (num_actors, ...)
                     obs=state.obs,
@@ -134,7 +149,7 @@ def make_train(config):
                     log_prob=log_prob,
                     reward=new_state.reward,
                     done=state.done,
-                    new_done=new_state.done,
+                    new_done=new_done,
                     value=value.squeeze(),
                     info=new_state.info,
                 )
@@ -142,7 +157,9 @@ def make_train(config):
                 runner_state = RunnerState(
                     train_state=train_state,
                     state=new_state,
-                    done=new_state.done,
+                    done=new_done,
+                    cumulative_return=runner_state.cumulative_return,
+                    timesteps=timesteps,
                     update_step=runner_state.update_step,
                     rng=rng,
                 )
@@ -161,7 +178,7 @@ def make_train(config):
             last_state = runner_state.state
             rng = runner_state.rng
 
-            _, last_value = network.apply(train_state.params, last_state)
+            _, last_value = network.apply(train_state.params, last_state.obs)
             last_value = last_value.squeeze()
 
             def _calculate_gae(traj_batch, last_val):
@@ -199,7 +216,7 @@ def make_train(config):
                 rng = update_state.rng
 
                 rng, _rng_permute = jax.random.split(rng)
-                permutation = jax.random.permutation(_rng_permute, config["num_actors"])
+                permutation = jax.random.permutation(_rng_permute, config["num_envs"])
                 batch = (traj_batch, advantages.squeeze(), targets.squeeze())
                 shuffled_batch = jax.tree.map(  # (time, envs, ...)
                     lambda x: jnp.take(x, permutation, axis=1), batch
@@ -221,8 +238,10 @@ def make_train(config):
 
                     def _loss(params, traj_minibatch, gae_minibatch, targets_minibatch):
                         # rerun network
-                        pi, value = network.apply(params, traj_minibatch.state)
-                        log_prob = pi.log_prob(traj_minibatch.action)
+                        pi, value = network.apply(params, traj_minibatch.obs)
+                        log_prob = pi.log_prob(traj_minibatch.action).sum(
+                            axis=-1
+                        )  # Sum across action dimensions
 
                         # actor loss
                         logratio = log_prob - traj_minibatch.log_prob
@@ -334,14 +353,44 @@ def make_train(config):
                 (reward, done),
             )
             only_returns = jnp.where(done, returns, 0)  # only returns at done steps
-            returns_avg = only_returns.sum() / done.sum()
+            returns_avg = jnp.where(
+                done.sum() > 0, only_returns.sum() / done.sum(), 0.0
+            )
+
+            # log episode lengths
+            def _episode_lengths(carry_length, done):
+                cumulative_length = carry_length + 1
+                reset_length = jnp.zeros(done.shape[1:], dtype=float)
+                carry_length = jnp.where(done, reset_length, cumulative_length)
+                return carry_length, cumulative_length
+
+            # Scan through transitions to calculate episode lengths
+            _, episode_lengths = jax.lax.scan(_episode_lengths, initial_timesteps, done)
+
+            # Calculate average episode length from completed episodes
+            only_episode_ends = jnp.where(
+                done, episode_lengths, 0
+            )  # only lengths at done steps
+            episode_length_avg = jnp.where(
+                done.sum() > 0, only_episode_ends.sum() / done.sum(), 0.0
+            )
 
             # wandb
             metric = {}
             metric["update_step"] = runner_state.update_step
-            metric["return"] = returns_avg
             metric["env_step"] = (
                 runner_state.update_step * config["num_envs"] * config["num_steps"]
+            )
+            metric["return"] = returns_avg
+            metric["episode_length"] = episode_length_avg
+
+            jax.debug.print(
+                "update_step: {update_step}, return: {returns_avg}, episode_length: {episode_length_avg}, done: {done}, reward: {reward}",
+                update_step=runner_state.update_step,
+                returns_avg=returns_avg,
+                episode_length_avg=episode_length_avg,
+                done=done,
+                reward=reward,
             )
 
             def callback(exp_id, metric):
@@ -355,6 +404,7 @@ def make_train(config):
                 state=runner_state.state,
                 done=runner_state.done,
                 cumulative_return=new_cumulative_return,
+                timesteps=runner_state.timesteps,
                 update_step=runner_state.update_step + 1,
                 rng=runner_state.rng,
             )
@@ -362,13 +412,14 @@ def make_train(config):
             return runner_state, metric
 
         rng, _train_rng = jax.random.split(rng)
-        done = jnp.zeros((config["num_envs"]), dtype=bool)
+        done = jnp.zeros((config["num_envs"]), dtype=jnp.float32)
         cumulative_return = jnp.zeros((config["num_envs"]), dtype=float)
         initial_runner_state = RunnerState(
             train_state=train_state,
             state=state,
             done=done,
             cumulative_return=cumulative_return,
+            timesteps=jnp.zeros((config["num_envs"]), dtype=jnp.int32),
             update_step=0,
             rng=_train_rng,
         )
