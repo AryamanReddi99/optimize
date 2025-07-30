@@ -7,10 +7,10 @@ from jax._src.typing import Array
 from omegaconf import OmegaConf
 import datetime
 from optimize.utils.wandb_multilogger import WandbMultiLogger
-from optimize.networks.mlp import ActorCritic
+from optimize.networks.mlp import ActorCriticDiscrete
 import numpy as np
 import optax
-from mujoco_playground import registry
+import gymnax
 from optimize.utils.jax_utils import pytree_norm
 
 
@@ -27,6 +27,7 @@ class Transition(NamedTuple):
 
 class RunnerState(NamedTuple):
     train_state: TrainState
+    obs: jnp.ndarray
     state: jnp.ndarray
     done: jnp.ndarray
     cumulative_return: jnp.ndarray
@@ -45,7 +46,7 @@ class Updatestate(NamedTuple):
 
 def make_train(config):
     # env
-    env = registry.load("CheetahRun")
+    env, env_params = gymnax.make("CartPole-v1")
 
     # config
     config["num_updates"] = (
@@ -62,7 +63,7 @@ def make_train(config):
             # env reset
             rng, _rng_reset = jax.random.split(rng)
             _rng_resets = jax.random.split(_rng_reset, config["num_envs"])
-            state = jax.vmap(env.reset)(_rng_resets)
+            obs, state = jax.vmap(env.reset, in_axes=(0, None))(_rng_resets, env_params)
 
             # network and optimizers
             def linear_schedule(count):
@@ -73,12 +74,12 @@ def make_train(config):
                 )
                 return config["lr"] * frac
 
-            network = ActorCritic(
-                action_dim=env.action_size,
+            network = ActorCriticDiscrete(
+                action_dim=env.num_actions,
                 activation=config["activation"],
             )
             rng, _rng = jax.random.split(rng)
-            init_x = jnp.zeros(state.obs.shape)
+            init_x = jnp.zeros(obs.shape)
             network_params = network.init(_rng, init_x)
             if config["optimizer"] == "adam":
                 optimizer = optax.adam
@@ -99,10 +100,10 @@ def make_train(config):
                 params=network_params,
                 tx=tx,
             )
-            return state, train_state, network
+            return obs, state, train_state, network
 
         rng, _rng_setup = jax.random.split(rng)
-        state, train_state, network = train_setup(_rng_setup)
+        obs, state, train_state, network = train_setup(_rng_setup)
 
         def _train_loop(runner_state, unused):
             initial_timesteps = runner_state.timesteps
@@ -110,53 +111,54 @@ def make_train(config):
             # collect transitions
             def _env_step(runner_state, unused):
                 train_state = runner_state.train_state
+                obs = runner_state.obs
                 state = runner_state.state
                 done = runner_state.done
                 rng = runner_state.rng
 
                 # reset env if needed
-                def reset_if_done(state, done, rng):
-                    return jax.lax.cond(done, lambda: env.reset(rng), lambda: state)
+                def reset_if_done(obs, state, done, rng):
+                    return jax.lax.cond(
+                        done, lambda: env.reset(rng, env_params), lambda: (obs, state)
+                    )
 
                 rng, _rng_reset = jax.random.split(rng)
                 rng_resets = jax.random.split(_rng_reset, config["num_envs"])
-                state = jax.vmap(reset_if_done)(state, done, rng_resets)
+                obs, state = jax.vmap(reset_if_done)(obs, state, done, rng_resets)
 
                 # sample actions
                 rng, _rng_action = jax.random.split(rng)
-                pi, value = network.apply(train_state.params, state.obs)
+                pi, value = network.apply(train_state.params, obs)
                 action = pi.sample(seed=_rng_action)
-                # Clip continuous actions to valid range
-                action = jnp.clip(action, -1.0, 1.0)
-                log_prob = pi.log_prob(action).sum(
-                    axis=-1
-                )  # Sum across action dimensions
+                log_prob = pi.log_prob(action)
 
                 # step the environment
                 rng, _rng = jax.random.split(rng)
-                new_state = jax.vmap(env.step)(state, action)
+                rng_step = jax.random.split(_rng, config["num_envs"])
+                new_obs, new_state, reward, new_done, info = jax.vmap(env.step)(
+                    rng_step, state, action
+                )
 
-                # Update timesteps and check horizon
+                # Update timesteps
                 timesteps = runner_state.timesteps + 1
-                horizon_done = timesteps >= config["horizon"]
-                new_done = jnp.asarray(new_state.done, dtype=bool) | horizon_done
 
                 # Reset timesteps for environments that are done
                 timesteps = jnp.where(new_done, 0, timesteps)
 
                 transition = Transition(  # transitions are batched (num_actors, ...)
-                    obs=state.obs,
+                    obs=obs,
                     action=action.squeeze(),
                     log_prob=log_prob,
-                    reward=new_state.reward,
-                    done=state.done,
+                    reward=reward,
+                    done=done,
                     new_done=new_done,
                     value=value.squeeze(),
-                    info=new_state.info,
+                    info=info,
                 )
 
                 runner_state = RunnerState(
                     train_state=train_state,
+                    obs=new_obs,
                     state=new_state,
                     done=new_done,
                     cumulative_return=runner_state.cumulative_return,
@@ -176,10 +178,10 @@ def make_train(config):
 
             # advantages
             train_state = runner_state.train_state
-            last_state = runner_state.state
+            last_obs = runner_state.obs
             rng = runner_state.rng
 
-            _, last_value = network.apply(train_state.params, last_state.obs)
+            _, last_value = network.apply(train_state.params, last_obs)
             last_value = last_value.squeeze()
 
             def _calculate_gae(traj_batch, last_val):
@@ -240,9 +242,7 @@ def make_train(config):
                     def _loss(params, traj_minibatch, gae_minibatch, targets_minibatch):
                         # rerun network
                         pi, value = network.apply(params, traj_minibatch.obs)
-                        log_prob = pi.log_prob(traj_minibatch.action).sum(
-                            axis=-1
-                        )  # Sum across action dimensions
+                        log_prob = pi.log_prob(traj_minibatch.action)
 
                         # actor loss
                         logratio = log_prob - traj_minibatch.log_prob
@@ -403,6 +403,7 @@ def make_train(config):
 
             runner_state = RunnerState(
                 train_state=update_state.train_state,
+                obs=runner_state.obs,
                 state=runner_state.state,
                 done=runner_state.done,
                 cumulative_return=new_cumulative_return,
@@ -418,6 +419,7 @@ def make_train(config):
         cumulative_return = jnp.zeros((config["num_envs"]), dtype=float)
         initial_runner_state = RunnerState(
             train_state=train_state,
+            obs=obs,
             state=state,
             done=done,
             cumulative_return=cumulative_return,
@@ -466,9 +468,7 @@ def main(config):
         train_vmap = jax.vmap(make_train(config))
         train_vjit = jax.jit(train_vmap)
 
-        # profile
-        with jax.profiler.trace("train_vjit", create_perfetto_link=True):
-            out = jax.block_until_ready(train_vjit(rng_seeds, exp_ids))
+        out = jax.block_until_ready(train_vjit(rng_seeds, exp_ids))
     finally:
         LOGGER.finish()
         print("Finished.")

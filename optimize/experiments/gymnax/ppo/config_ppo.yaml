@@ -1,10 +1,10 @@
-total_timesteps: 1600
-num_envs: 8
-num_steps: 200
+total_timesteps: 1e7
+num_envs: 64
+num_steps: 1000
 "lr": 0.004
 "optimizer": "adam" # adam, rmsprop
 "anneal_lr": True
-"update_epochs": 2
+"update_epochs": 4
 "num_minibatches": 2
 "gamma": 0.99
 "gae_lambda": 0.95
@@ -17,10 +17,9 @@ num_steps: 200
 "scale_clip_eps": False
 
 # env
-env_name: "CheetahRun"
-horizon: 1000
+env_name: "CartPole-v1"
 seed: 0
-num_seeds: 1
+num_seeds: 5
 
 # wandb
 project: optimize
