@@ -2,7 +2,7 @@ total_timesteps: 1e7
 num_envs: 64
 num_steps: 1000
 "lr": 0.004
-"optimizer": "adam" # adam, rmsprop
+"optimizer": "adam" # adam, rmsprop, sgd
 "anneal_lr": True
 "update_epochs": 4
 "num_minibatches": 2
@@ -17,11 +17,11 @@ num_steps: 1000
 "scale_clip_eps": False
 
 # env
-env_name: "CartPole-v1"
+env_name: "Reacher-misc"
 seed: 0
 num_seeds: 5
 
 # wandb
 project: optimize
 use_timestamp: True
-wandb_mode: "online" # online, disabled
+wandb_mode: "disabled" # online, disabled
