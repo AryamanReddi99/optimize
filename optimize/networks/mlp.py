@@ -3,7 +3,7 @@ from typing import Sequence, NamedTuple, Dict
 from flax.linen.initializers import constant, orthogonal
 import numpy as np
 import jax.numpy as jnp
-import distrax
+from distrax import Normal, Categorical
 
 
 class ActorCriticContinuous(nn.Module):
@@ -44,7 +44,7 @@ class ActorCriticContinuous(nn.Module):
         )(actor_log_std)
 
         # Create Normal distribution for continuous actions
-        pi = distrax.Normal(loc=actor_mean, scale=jnp.exp(actor_log_std))
+        pi = Normal(loc=actor_mean, scale=jnp.exp(actor_log_std))
 
         # Critic network
         critic = nn.Dense(
@@ -83,7 +83,7 @@ class ActorCriticDiscrete(nn.Module):
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
-        pi = distrax.Categorical(logits=actor_mean)
+        pi = Categorical(logits=actor_mean)
 
         critic = nn.Dense(
             64, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)

@@ -5,7 +5,7 @@ num_steps: 1000
 "optimizer": "adam" # adam, rmsprop, sgd
 "anneal_lr": True
 "update_epochs": 4
-"num_minibatches": 2
+"num_minibatches": 4
 "gamma": 0.99
 "gae_lambda": 0.95
 "clip_eps": 0.2
@@ -24,4 +24,4 @@ num_seeds: 5
 # wandb
 project: optimize
 use_timestamp: True
-wandb_mode: "disabled" # online, disabled
+wandb_mode: "online" # online, disabled

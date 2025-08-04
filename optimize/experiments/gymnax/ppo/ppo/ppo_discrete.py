@@ -79,38 +79,33 @@ def make_train(config):
             rng, _rng = jax.random.split(rng)
             init_x = jnp.zeros(obs.shape)
             network_params = network.init(_rng, init_x)
+            # Create initial optimizer
             if config["optimizer"] == "adam":
-                optimizer = optax.adam
-            elif config["optimizer"] == "rmsprop":
-                optimizer = optax.rmsprop
-            elif config["optimizer"] == "sgd":
-                optimizer = optax.sgd
-
-            # learning rate schedule
-            if config["anneal_lr"]:
-                schedule = linear_schedule
-            else:
-                schedule = lambda count: config["lr"]
-
-            if config["optimizer"] == "sgd":
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    optimizer(learning_rate=schedule),
+                    optax.adam(
+                        learning_rate=linear_schedule, eps=1e-5, b1=0.9, b2=0.999
+                    ),
                 )
-            else:
+            elif config["optimizer"] == "rmsprop":
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    optimizer(learning_rate=schedule, eps=1e-5),
+                    optax.rmsprop(learning_rate=linear_schedule, eps=1e-5),
+                )
+            elif config["optimizer"] == "sgd":
+                tx = optax.chain(
+                    optax.clip_by_global_norm(config["max_grad_norm"]),
+                    optax.sgd(learning_rate=linear_schedule),
                 )
             train_state = TrainState.create(
                 apply_fn=network.apply,
                 params=network_params,
                 tx=tx,
             )
-            return obs, state, train_state, network, schedule
+            return obs, state, train_state, network
 
         rng, _rng_setup = jax.random.split(rng)
-        obs, state, train_state, network, schedule = train_setup(_rng_setup)
+        obs, state, train_state, network = train_setup(_rng_setup)
 
         def _train_loop(runner_state, unused):
             initial_timesteps = runner_state.timesteps
@@ -148,11 +143,9 @@ def make_train(config):
 
                 # Update timesteps
                 timesteps = runner_state.timesteps + 1
-
-                # Reset timesteps for environments that are done
                 timesteps = jnp.where(new_done, 0, timesteps)
 
-                transition = Transition(  # transitions are batched (num_actors, ...)
+                transition = Transition(
                     obs=obs,
                     action=action.squeeze(),
                     log_prob=log_prob,
@@ -314,31 +307,15 @@ def make_train(config):
                         grads=grads,
                     )
 
-                    # replace adam betas
-                    adam_state = train_state.opt_state[1][0]
-                    new_b1 = 0.8
-                    new_b2 = 0.888
-                    new_tx = optax.chain(
-                        optax.clip_by_global_norm(config["max_grad_norm"]),
-                        optax.adam(
-                            learning_rate=schedule, eps=1e-5, b1=new_b1, b2=new_b2
-                        ),
-                    )
-                    new_opt_state = new_tx.init(train_state.params)
-                    new_adam_state = (
-                        optax.ScaleByAdamState(
-                            count=adam_state.count, mu=adam_state.mu, nu=adam_state.nu
-                        ),
-                        train_state.opt_state[1][0],
-                    )
-                    new_opt_state_combined = (new_opt_state[0], new_adam_state)
-                    train_state = train_state.replace(
-                        tx=new_tx, opt_state=new_opt_state_combined
-                    )
-
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
-                    total_loss[1]["b1"] = new_b1
-                    total_loss[1]["b2"] = new_b2
+                    total_loss[1]["mu_norm"] = pytree_norm(
+                        train_state.opt_state[1][0].mu
+                    )
+                    total_loss[1]["nu_norm"] = pytree_norm(
+                        train_state.opt_state[1][0].nu
+                    )
+                    total_loss[1]["count"] = train_state.opt_state[1][0].count
+
                     return train_state, total_loss
 
                 train_state, total_loss = jax.lax.scan(
