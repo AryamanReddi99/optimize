@@ -3,7 +3,7 @@ num_envs: 16
 num_steps: 4000
 "lr": 4e-3
 "optimizer": "adam" # adam, rmsprop, sgd
-"anneal_lr": True
+"anneal_lr": False
 "update_epochs": 64
 "num_minibatches": 4
 "gamma": 0.99

@@ -515,7 +515,7 @@ def main(config):
         print("Compile finished...")
 
         # wandb
-        job_type = f"ppo_beta1_sweep_{config['env_name']}"
+        job_type = f"ppo_beta1_sweep_const_lr4e-3_{config['env_name']}"
         group = (
             f"ppo_beta1_{config['beta_1']}_{config['env_name']}"
             + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
