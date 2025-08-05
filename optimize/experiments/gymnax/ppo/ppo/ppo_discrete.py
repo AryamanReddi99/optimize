@@ -12,6 +12,8 @@ import numpy as np
 import optax
 import gymnax
 from optimize.utils.jax_utils import pytree_norm
+import pickle
+import os
 
 
 class Transition(NamedTuple):
@@ -303,6 +305,33 @@ def make_train(config):
                         advantages_minibatch,
                         targets_minibatch,
                     )
+
+                    # Calculate cosine similarity between current gradient and running gradient
+                    def cosine_similarity(grad1, grad2):
+                        # Flatten gradients for cosine similarity calculation
+                        flat_grad1 = jax.tree.leaves(grad1)
+                        flat_grad2 = jax.tree.leaves(grad2)
+
+                        # Concatenate all gradients
+                        vec1 = jnp.concatenate([jnp.ravel(x) for x in flat_grad1])
+                        vec2 = jnp.concatenate([jnp.ravel(x) for x in flat_grad2])
+
+                        # Calculate cosine similarity
+                        dot_product = jnp.dot(vec1, vec2)
+                        norm1 = jnp.linalg.norm(vec1)
+                        norm2 = jnp.linalg.norm(vec2)
+
+                        # Avoid division by zero
+                        denominator = norm1 * norm2
+                        cosine_sim = jnp.where(
+                            denominator > 1e-8, dot_product / denominator, 0.0
+                        )
+                        return cosine_sim
+
+                    # Get running gradient from optimizer state (mu from Adam)
+                    running_grad = train_state.opt_state[1][0].mu
+                    cos_sim = cosine_similarity(grads, running_grad)
+
                     train_state = train_state.apply_gradients(
                         grads=grads,
                     )
@@ -315,6 +344,7 @@ def make_train(config):
                         train_state.opt_state[1][0].nu
                     )
                     total_loss[1]["count"] = train_state.opt_state[1][0].count
+                    total_loss[1]["cosine_similarity"] = cos_sim
 
                     return train_state, total_loss
 

@@ -11,6 +11,8 @@ import numpy as np
 import optax
 import gymnax
 from optimize.utils.jax_utils import pytree_norm
+import pickle
+import os
 
 
 class Transition(NamedTuple):
@@ -45,6 +47,32 @@ class Updatestate(NamedTuple):
     advantages: jnp.ndarray
     targets: jnp.ndarray
     rng: Array
+
+
+def save_model(
+    params,
+    config,
+    exp_id,
+    models_dir,
+):
+    """Save the trained model parameters."""
+    os.makedirs(models_dir, exist_ok=True)
+
+    # Create a unique filename based on config and experiment ID
+    model_path = os.path.join(models_dir, exp_id)
+
+    # Save model data
+    model_data = {
+        "params": params,
+        "config": config,
+        "env_name": config["env_name"],
+        "exp_id": exp_id,
+    }
+
+    with open(model_path, "wb") as f:
+        pickle.dump(model_data, f)
+
+    return model_path
 
 
 def make_train(config):
@@ -331,13 +359,12 @@ def make_train(config):
                         )
                         return config["lr"] * frac
 
-                    new_beta1 = 0.0
                     new_tx = optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
                         optax.adam(
                             learning_rate=linear_schedule,
                             eps=1e-5,
-                            b1=new_beta1,
+                            b1=config["beta_1"],
                         ),
                     )
 
@@ -351,7 +378,7 @@ def make_train(config):
                                 mu=updated_opt_state[1][0].mu,
                                 nu=updated_opt_state[1][0].nu,
                             ),
-                            new_opt_state[1][1],
+                            updated_opt_state[1][1],
                         ),
                     )
 
@@ -384,6 +411,7 @@ def make_train(config):
                     total_loss[1]["mu_norm"] = pytree_norm(new_opt_state[1][0].mu)
                     total_loss[1]["nu_norm"] = pytree_norm(new_opt_state[1][0].nu)
                     total_loss[1]["beta_1"] = new_beta1
+                    total_loss[1]["count"] = new_opt_state[1][1].count
                     total_loss[1]["cosine_similarity"] = cos_sim
                     return (new_params, new_opt_state, new_running_grad), total_loss
 
@@ -518,12 +546,13 @@ def make_train(config):
             None,
             length=config["num_updates"],
         )
+
         return final_runner_state, metrics_batch
 
     return train
 
 
-@hydra.main(version_base=None, config_path="./", config_name="config_ppo")
+@hydra.main(version_base=None, config_path="./", config_name="config_ppo_beta")
 def main(config):
     try:
         # vmap and compile
@@ -538,10 +567,8 @@ def main(config):
         print("Compile finished...")
 
         # wandb
-        job_type = f"ppo_beta_{config['env_name']}"
-        group = f"ppo_beta_{config['env_name']}"
-        if config["use_timestamp"]:
-            group += datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
+        job_type = f"ppo_beta_cosine_{config['env_name']}"
+        group = job_type + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
         global LOGGER
         LOGGER = WandbMultiLogger(
             project=config["project"],
@@ -559,6 +586,11 @@ def main(config):
     finally:
         LOGGER.finish()
         print("Finished.")
+
+        # Save the final models
+        if config["save_model"]:
+            model_path = save_model(out[0].params, config, group, config["models_dir"])
+            print(f"Models saved to: {model_path}")
 
 
 if __name__ == "__main__":

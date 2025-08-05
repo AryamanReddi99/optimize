@@ -1,11 +1,11 @@
-total_timesteps: 1e7
+total_timesteps: 4e7
 num_envs: 64
 num_steps: 1000
 "lr": 0.004
 "optimizer": "adam" # adam, rmsprop, sgd
 "beta_1": 0.9
 "anneal_lr": True
-"update_epochs": 4
+"update_epochs": 32
 "num_minibatches": 4
 "gamma": 0.99
 "gae_lambda": 0.95
@@ -18,11 +18,12 @@ num_steps: 1000
 "scale_clip_eps": False
 
 # env
-env_name: "Reacher-misc"
+env_name: "MountainCar-v0"
 seed: 0
 num_seeds: 5
 
-# wandb
+# wandb 
 project: optimize
-use_timestamp: True
+save_model: False
+models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta/models"
 wandb_mode: "online" # online, disabled
