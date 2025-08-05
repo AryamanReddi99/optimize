@@ -16,7 +16,7 @@ for beta_1 in "${beta_1_values[@]}"; do
     
     echo "Completed run with beta_1 = $beta_1"
     echo "----------------------------------------"
-    sleep 120 # sleep for 2 minutes
+    sleep 60  # sleep for 1 minute
 done
 
 echo "All beta_1 sweeps completed!"
