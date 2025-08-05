@@ -342,6 +342,11 @@ def make_train(config):
 
                     cos_sim = cosine_similarity(grads, running_grad)
 
+                    # Calculate angle between gradient vectors (in degrees)
+                    cos_sim_clamped = jnp.clip(cos_sim, -1.0, 1.0)
+                    gradient_angle_rad = jnp.arccos(cos_sim_clamped)
+                    gradient_angle_deg = gradient_angle_rad * 180.0 / jnp.pi
+
                     train_state = train_state.apply_gradients(
                         grads=grads,
                     )
@@ -357,6 +362,7 @@ def make_train(config):
                         train_state.opt_state[1][0].nu
                     )
                     total_loss[1]["cosine_similarity"] = cos_sim
+                    total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
 
                     return (train_state, new_running_grad), total_loss
 
@@ -509,10 +515,11 @@ def main(config):
         print("Compile finished...")
 
         # wandb
-        job_type = f"ppo_{config['env_name']}"
-        group = f"ppo_{config['env_name']}"
-        if config["use_timestamp"]:
-            group += datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
+        job_type = f"ppo_beta1_sweep_{config['env_name']}"
+        group = (
+            f"ppo_beta1_{config['beta_1']}_{config['env_name']}"
+            + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
+        )
         global LOGGER
         LOGGER = WandbMultiLogger(
             project=config["project"],
