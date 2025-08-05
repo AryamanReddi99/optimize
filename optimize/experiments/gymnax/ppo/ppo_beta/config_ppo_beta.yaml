@@ -26,4 +26,4 @@ num_seeds: 5
 project: optimize
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta/models"
-wandb_mode: "online" # online, disabled
+wandb_mode: "disabled" # online, disabled

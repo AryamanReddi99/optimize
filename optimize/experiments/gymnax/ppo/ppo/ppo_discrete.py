@@ -29,6 +29,7 @@ class Transition(NamedTuple):
 
 class RunnerState(NamedTuple):
     train_state: TrainState
+    running_grad: jnp.ndarray  # Running gradient for cosine similarity
     obs: jnp.ndarray
     state: jnp.ndarray
     done: jnp.ndarray
@@ -40,6 +41,7 @@ class RunnerState(NamedTuple):
 
 class Updatestate(NamedTuple):
     train_state: TrainState
+    running_grad: jnp.ndarray  # Running gradient for cosine similarity
     traj_batch: Transition
     advantages: jnp.ndarray
     targets: jnp.ndarray
@@ -104,10 +106,14 @@ def make_train(config):
                 params=network_params,
                 tx=tx,
             )
-            return obs, state, train_state, network
+
+            # Initialize running gradient (zero gradient)
+            running_grad = jax.tree.map(jnp.zeros_like, network_params)
+
+            return obs, state, train_state, running_grad, network
 
         rng, _rng_setup = jax.random.split(rng)
-        obs, state, train_state, network = train_setup(_rng_setup)
+        obs, state, train_state, running_grad, network = train_setup(_rng_setup)
 
         def _train_loop(runner_state, unused):
             initial_timesteps = runner_state.timesteps
@@ -160,6 +166,7 @@ def make_train(config):
 
                 runner_state = RunnerState(
                     train_state=train_state,
+                    running_grad=runner_state.running_grad,
                     obs=new_obs,
                     state=new_state,
                     done=new_done,
@@ -215,6 +222,7 @@ def make_train(config):
             # update networks
             def _update_epoch(update_state, unused):
                 train_state = update_state.train_state
+                running_grad = update_state.running_grad
                 traj_batch = update_state.traj_batch
                 advantages = update_state.advantages
                 targets = update_state.targets
@@ -238,7 +246,8 @@ def make_train(config):
                     shuffled_batch_split,
                 )
 
-                def _update_minibatch(train_state, minibatch):
+                def _update_minibatch(carry, minibatch):
+                    train_state, running_grad = carry
                     traj_minibatch, advantages_minibatch, targets_minibatch = minibatch
 
                     def _loss(params, traj_minibatch, gae_minibatch, targets_minibatch):
@@ -328,13 +337,14 @@ def make_train(config):
                         )
                         return cosine_sim
 
-                    # Get running gradient from optimizer state (mu from Adam)
-                    running_grad = train_state.opt_state[1][0].mu
                     cos_sim = cosine_similarity(grads, running_grad)
 
                     train_state = train_state.apply_gradients(
                         grads=grads,
                     )
+
+                    # Update running gradient with current gradient
+                    new_running_grad = grads
 
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
                     total_loss[1]["mu_norm"] = pytree_norm(
@@ -343,19 +353,19 @@ def make_train(config):
                     total_loss[1]["nu_norm"] = pytree_norm(
                         train_state.opt_state[1][0].nu
                     )
-                    total_loss[1]["count"] = train_state.opt_state[1][0].count
                     total_loss[1]["cosine_similarity"] = cos_sim
 
-                    return train_state, total_loss
+                    return (train_state, new_running_grad), total_loss
 
-                train_state, total_loss = jax.lax.scan(
+                (final_train_state, final_running_grad), total_loss = jax.lax.scan(
                     _update_minibatch,
-                    train_state,
+                    (train_state, running_grad),
                     minibatches,
                 )
 
                 update_state = Updatestate(
-                    train_state=train_state,
+                    train_state=final_train_state,
+                    running_grad=final_running_grad,
                     traj_batch=traj_batch,
                     advantages=advantages,
                     targets=targets,
@@ -366,6 +376,7 @@ def make_train(config):
 
             update_state = Updatestate(
                 train_state=train_state,
+                running_grad=runner_state.running_grad,
                 traj_batch=traj_batch,
                 advantages=advantages,
                 targets=targets,
@@ -441,6 +452,7 @@ def make_train(config):
 
             runner_state = RunnerState(
                 train_state=update_state.train_state,
+                running_grad=update_state.running_grad,
                 obs=runner_state.obs,
                 state=runner_state.state,
                 done=runner_state.done,
@@ -457,6 +469,7 @@ def make_train(config):
         cumulative_return = jnp.zeros((config["num_envs"]), dtype=float)
         initial_runner_state = RunnerState(
             train_state=train_state,
+            running_grad=running_grad,
             obs=obs,
             state=state,
             done=done,

@@ -410,7 +410,6 @@ def make_train(config):
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
                     total_loss[1]["mu_norm"] = pytree_norm(new_opt_state[1][0].mu)
                     total_loss[1]["nu_norm"] = pytree_norm(new_opt_state[1][0].nu)
-                    total_loss[1]["beta_1"] = new_beta1
                     total_loss[1]["count"] = new_opt_state[1][1].count
                     total_loss[1]["cosine_similarity"] = cos_sim
                     return (new_params, new_opt_state, new_running_grad), total_loss

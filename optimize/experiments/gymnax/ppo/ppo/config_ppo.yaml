@@ -1,17 +1,17 @@
 total_timesteps: 4e7
-num_envs: 64
-num_steps: 1000
-"lr": 0.004
+num_envs: 16
+num_steps: 4000
+"lr": 4e-3
 "optimizer": "adam" # adam, rmsprop, sgd
 "anneal_lr": True
-"update_epochs": 32
+"update_epochs": 64
 "num_minibatches": 4
 "gamma": 0.99
 "gae_lambda": 0.95
 "clip_eps": 0.2
 "ent_coef": 0.0
 "vf_coef": 0.5
-"max_grad_norm": 0.5
+"max_grad_norm": 1.0
 "activation": "relu"
 "fc_dim_size": 128
 "scale_clip_eps": False
@@ -25,4 +25,4 @@ num_seeds: 5
 project: optimize
 use_timestamp: True
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo/models"
-wandb_mode: "disabled" # online, disabled
+wandb_mode: "online" # online, disabled
