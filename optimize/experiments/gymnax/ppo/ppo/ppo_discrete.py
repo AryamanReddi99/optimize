@@ -88,7 +88,10 @@ def make_train(config):
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
                     optax.adam(
-                        learning_rate=linear_schedule, eps=1e-5, b1=0.9, b2=0.999
+                        learning_rate=linear_schedule,
+                        eps=1e-5,
+                        b1=config["beta_1"],
+                        b2=config["beta_2"],
                     ),
                 )
             elif config["optimizer"] == "rmsprop":
