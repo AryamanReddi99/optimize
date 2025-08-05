@@ -3,7 +3,6 @@ num_envs: 64
 num_steps: 1000
 "lr": 0.004
 "optimizer": "adam" # adam, rmsprop, sgd
-"beta_1": 0.9
 "anneal_lr": True
 "update_epochs": 32
 "num_minibatches": 4
@@ -16,6 +15,7 @@ num_steps: 1000
 "activation": "relu"
 "fc_dim_size": 128
 "scale_clip_eps": False
+"beta_1": 0.9
 
 # env
 env_name: "MountainCar-v0"
