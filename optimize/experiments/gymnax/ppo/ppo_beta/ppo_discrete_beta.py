@@ -413,6 +413,7 @@ def make_train(config):
                         return cosine_sim
 
                     cos_sim = cosine_similarity(grads, running_grad)
+                    cos_sim_mu = cosine_similarity(grads, new_opt_state[1][0].mu)
 
                     # Calculate angle between gradient vectors (in degrees)
                     cos_sim_clamped = jnp.clip(cos_sim, -1.0, 1.0)
@@ -427,6 +428,7 @@ def make_train(config):
                     total_loss[1]["nu_norm"] = pytree_norm(new_opt_state[1][0].nu)
                     total_loss[1]["cosine_similarity"] = cos_sim
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
+                    total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
                     return (new_params, new_opt_state, new_running_grad), total_loss
 
                 (final_params, final_opt_state, final_running_grad), total_loss = (

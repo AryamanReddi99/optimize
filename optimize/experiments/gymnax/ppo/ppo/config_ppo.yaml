@@ -3,7 +3,7 @@ num_envs: 16
 num_steps: 4000
 "lr": 4e-3
 "optimizer": "adam" # adam, rmsprop, sgd
-"anneal_lr": False
+"anneal_lr": True
 "update_epochs": 64
 "num_minibatches": 4
 "gamma": 0.99
@@ -25,7 +25,7 @@ num_seeds: 10
 
 # wandb
 project: optimize
-job_type: ppo_beta1_sweep_const_lr4e-3
+job_type: ppo_beta1_sweep_network_stats
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo/models"
 wandb_mode: "online" # online, disabled

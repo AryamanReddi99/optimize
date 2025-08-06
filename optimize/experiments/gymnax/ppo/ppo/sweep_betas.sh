@@ -4,7 +4,7 @@
 conda activate cheap
 
 # Array of beta_1 values to test
-beta_1_values=(0.2 0.9 0.99)
+beta_1_values=(0.2 0.9)
 
 # Loop through each beta_1 value
 for beta_1 in "${beta_1_values[@]}"; do

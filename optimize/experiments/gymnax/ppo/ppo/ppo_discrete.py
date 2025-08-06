@@ -347,6 +347,9 @@ def make_train(config):
                         return cosine_sim
 
                     cos_sim = cosine_similarity(grads, running_grad)
+                    cos_sim_mu = cosine_similarity(
+                        grads, train_state.opt_state[1][0].mu
+                    )
 
                     # Calculate angle between gradient vectors (in degrees)
                     cos_sim_clamped = jnp.clip(cos_sim, -1.0, 1.0)
@@ -369,7 +372,7 @@ def make_train(config):
                     )
                     total_loss[1]["cosine_similarity"] = cos_sim
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
-
+                    total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
                     return (train_state, new_running_grad), total_loss
 
                 (final_train_state, final_running_grad), total_loss = jax.lax.scan(
@@ -444,6 +447,17 @@ def make_train(config):
                 done.sum() > 0, only_episode_ends.sum() / done.sum(), 0.0
             )
 
+            # log network stats
+            network_leaves = jax.tree.leaves(update_state.train_state.params)
+            flat_network = jnp.concatenate([jnp.ravel(x) for x in network_leaves])
+            network_l1 = jnp.sum(jnp.abs(flat_network))
+            network_l2 = jnp.linalg.norm(flat_network)
+            network_linfty = jnp.max(jnp.abs(flat_network))
+            network_mu = jnp.mean(flat_network)
+            network_std = jnp.std(flat_network)
+            network_max = jnp.max(flat_network)
+            network_min = jnp.min(flat_network)
+
             # log info
             total_loss, loss_info = loss_info
             loss_info["total_loss"] = total_loss
@@ -457,6 +471,13 @@ def make_train(config):
             )
             metric["return"] = returns_avg
             metric["episode_length"] = episode_length_avg
+            metric["network_l1"] = network_l1
+            metric["network_l2"] = network_l2
+            metric["network_linfty"] = network_linfty
+            metric["network_mu"] = network_mu
+            metric["network_std"] = network_std
+            metric["network_max"] = network_max
+            metric["network_min"] = network_min
             metric.update(loss_info)
 
             def callback(exp_id, metric):
