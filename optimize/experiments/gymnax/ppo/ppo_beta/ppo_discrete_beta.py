@@ -580,7 +580,7 @@ def main(config):
         print("Compile finished...")
 
         # wandb
-        job_type = f"ppo_beta_cosine_{config['env_name']}"
+        job_type = f"{config['job_type']}_{config['env_name']}"
         group = job_type + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
         global LOGGER
         LOGGER = WandbMultiLogger(

@@ -25,5 +25,7 @@ num_seeds: 10
 
 # wandb
 project: optimize
+job_type: ppo_beta1_sweep_const_lr4e-3
+save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo/models"
 wandb_mode: "online" # online, disabled
