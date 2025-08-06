@@ -76,6 +76,10 @@ def make_train(config):
                 )
                 return config["lr"] * frac
 
+            if config["anneal_lr"]:
+                lr_schedule = linear_schedule
+            else:
+                lr_schedule = config["lr"]
             network = ActorCriticDiscrete(
                 action_dim=env.num_actions,
                 activation=config["activation"],
@@ -88,7 +92,7 @@ def make_train(config):
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
                     optax.adam(
-                        learning_rate=linear_schedule,
+                        learning_rate=lr_schedule,
                         eps=1e-5,
                         b1=config["beta_1"],
                         b2=config["beta_2"],
@@ -97,12 +101,12 @@ def make_train(config):
             elif config["optimizer"] == "rmsprop":
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    optax.rmsprop(learning_rate=linear_schedule, eps=1e-5),
+                    optax.rmsprop(learning_rate=lr_schedule, eps=1e-5),
                 )
             elif config["optimizer"] == "sgd":
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    optax.sgd(learning_rate=linear_schedule),
+                    optax.sgd(learning_rate=lr_schedule),
                 )
             train_state = TrainState.create(
                 apply_fn=network.apply,
@@ -289,7 +293,8 @@ def make_train(config):
                         )
 
                         # stats
-                        approx_kl = ((ratio - 1) - logratio).mean()
+                        approx_kl_backward = ((ratio - 1) - logratio).mean()
+                        approx_kl_forward = (ratio * logratio - (ratio - 1)).mean()
                         clip_frac = jnp.mean(jnp.abs(ratio - 1) > config["clip_eps"])
 
                         total_loss = (
@@ -303,7 +308,8 @@ def make_train(config):
                             "actor_loss": loss_actor,
                             "entropy": entropy,
                             "ratio": ratio,
-                            "approx_kl": approx_kl,
+                            "approx_kl_backward": approx_kl_backward,
+                            "approx_kl_forward": approx_kl_forward,
                             "clip_frac": clip_frac,
                             "gae_mean": gae_minibatch.mean(),
                             "gae_std": gae_minibatch.std(),
@@ -416,7 +422,7 @@ def make_train(config):
                 cumulative_return,
                 (reward, done),
             )
-            only_returns = jnp.where(done, returns, 0)  # only returns at done steps
+            only_returns = jnp.where(done, returns, 0)
             returns_avg = jnp.where(
                 done.sum() > 0, only_returns.sum() / done.sum(), 0.0
             )
@@ -502,7 +508,6 @@ def make_train(config):
 @hydra.main(version_base=None, config_path="./", config_name="config_ppo")
 def main(config):
     try:
-
         # vmap and compile
         config = OmegaConf.to_container(config)
         rng = jax.random.PRNGKey(config["seed"])

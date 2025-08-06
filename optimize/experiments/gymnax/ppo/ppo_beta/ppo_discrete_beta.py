@@ -103,6 +103,10 @@ def make_train(config):
                 )
                 return config["lr"] * frac
 
+            if config["anneal_lr"]:
+                lr_schedule = linear_schedule
+            else:
+                lr_schedule = config["lr"]
             network = ActorCriticDiscrete(
                 action_dim=env.num_actions,
                 activation=config["activation"],
@@ -110,22 +114,26 @@ def make_train(config):
             rng, _rng = jax.random.split(rng)
             init_x = jnp.zeros(obs.shape)
             network_params = network.init(_rng, init_x)
-
             # Create initial optimizer
             if config["optimizer"] == "adam":
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    optax.adam(learning_rate=linear_schedule, eps=1e-5, b1=0.9),
+                    optax.adam(
+                        learning_rate=lr_schedule,
+                        eps=1e-5,
+                        b1=config["beta_1"],
+                        b2=config["beta_2"],
+                    ),
                 )
             elif config["optimizer"] == "rmsprop":
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    optax.rmsprop(learning_rate=linear_schedule, eps=1e-5),
+                    optax.rmsprop(learning_rate=lr_schedule, eps=1e-5),
                 )
             elif config["optimizer"] == "sgd":
                 tx = optax.chain(
                     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    optax.sgd(learning_rate=linear_schedule),
+                    optax.sgd(learning_rate=lr_schedule),
                 )
 
             # Initialize optimizer state
@@ -134,11 +142,20 @@ def make_train(config):
             # Initialize running gradient (zero gradient)
             running_grad = jax.tree.map(jnp.zeros_like, network_params)
 
-            return obs, state, network_params, opt_state, running_grad, network, tx
+            return (
+                obs,
+                state,
+                network_params,
+                opt_state,
+                running_grad,
+                network,
+                tx,
+                lr_schedule,
+            )
 
         rng, _rng_setup = jax.random.split(rng)
-        obs, state, params, opt_state, running_grad, network, tx = train_setup(
-            _rng_setup
+        obs, state, params, opt_state, running_grad, network, tx, lr_schedule = (
+            train_setup(_rng_setup)
         )
 
         def _train_loop(runner_state, unused):
@@ -314,7 +331,8 @@ def make_train(config):
                         )
 
                         # stats
-                        approx_kl = ((ratio - 1) - logratio).mean()
+                        approx_kl_backward = ((ratio - 1) - logratio).mean()
+                        approx_kl_forward = (ratio * logratio - (ratio - 1)).mean()
                         clip_frac = jnp.mean(jnp.abs(ratio - 1) > config["clip_eps"])
 
                         total_loss = (
@@ -328,7 +346,8 @@ def make_train(config):
                             "actor_loss": loss_actor,
                             "entropy": entropy,
                             "ratio": ratio,
-                            "approx_kl": approx_kl,
+                            "approx_kl_backward": approx_kl_backward,
+                            "approx_kl_forward": approx_kl_forward,
                             "clip_frac": clip_frac,
                             "gae_mean": gae_minibatch.mean(),
                             "gae_std": gae_minibatch.std(),
@@ -347,24 +366,13 @@ def make_train(config):
                     updates, updated_opt_state = tx.update(grads, opt_state)
                     new_params = optax.apply_updates(params, updates)
 
-                    # Create new optimizer with modified beta1
-                    def linear_schedule(count):
-                        frac = (
-                            1.0
-                            - (
-                                count
-                                // (config["num_minibatches"] * config["update_epochs"])
-                            )
-                            / config["num_updates"]
-                        )
-                        return config["lr"] * frac
-
                     new_tx = optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
                         optax.adam(
-                            learning_rate=linear_schedule,
+                            learning_rate=lr_schedule,
                             eps=1e-5,
                             b1=config["beta_1"],
+                            b2=config["beta_2"],
                         ),
                     )
 
@@ -405,13 +413,20 @@ def make_train(config):
                         return cosine_sim
 
                     cos_sim = cosine_similarity(grads, running_grad)
+
+                    # Calculate angle between gradient vectors (in degrees)
+                    cos_sim_clamped = jnp.clip(cos_sim, -1.0, 1.0)
+                    gradient_angle_rad = jnp.arccos(cos_sim_clamped)
+                    gradient_angle_deg = gradient_angle_rad * 180.0 / jnp.pi
+
+                    # Update running gradient with current gradient
                     new_running_grad = grads
 
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
                     total_loss[1]["mu_norm"] = pytree_norm(new_opt_state[1][0].mu)
                     total_loss[1]["nu_norm"] = pytree_norm(new_opt_state[1][0].nu)
-                    total_loss[1]["count"] = new_opt_state[1][1].count
                     total_loss[1]["cosine_similarity"] = cos_sim
+                    total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
                     return (new_params, new_opt_state, new_running_grad), total_loss
 
                 (final_params, final_opt_state, final_running_grad), total_loss = (
@@ -545,7 +560,6 @@ def make_train(config):
             None,
             length=config["num_updates"],
         )
-
         return final_runner_state, metrics_batch
 
     return train
