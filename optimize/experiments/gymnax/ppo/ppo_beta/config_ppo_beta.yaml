@@ -16,6 +16,7 @@ num_steps: 4000
 "fc_dim_size": 128
 "scale_clip_eps": False
 "beta_1": 0.9
+"beta_2": 0.999
 
 # env
 env_name: "MountainCar-v0"
