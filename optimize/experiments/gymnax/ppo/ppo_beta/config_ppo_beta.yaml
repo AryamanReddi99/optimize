@@ -28,4 +28,4 @@ project: optimize
 job_type: ppo_beta
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta/models"
-wandb_mode: "disabled" # online, disabled
+wandb_mode: "online" # online, disabled
