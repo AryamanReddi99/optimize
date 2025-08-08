@@ -1,3 +1,8 @@
+import os
+
+# disable randomness
+os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+
 import jax
 import jax.numpy as jnp
 import hydra
@@ -12,7 +17,6 @@ import optax
 import gymnax
 from optimize.utils.jax_utils import pytree_norm, jprint
 import pickle
-import os
 
 
 class Transition(NamedTuple):
@@ -36,6 +40,7 @@ class RunnerState(NamedTuple):
     cumulative_return: jnp.ndarray
     timesteps: jnp.ndarray
     update_step: int
+    mini_update_step: int
     rng: Array
 
 
@@ -46,6 +51,7 @@ class Updatestate(NamedTuple):
     traj_batch: Transition
     advantages: jnp.ndarray
     targets: jnp.ndarray
+    mini_update_step: int
     rng: Array
 
 
@@ -142,6 +148,15 @@ def make_train(config):
             # Initialize running gradient (zero gradient)
             running_grad = jax.tree.map(jnp.zeros_like, network_params)
 
+            # Beta 1 schedule
+            def beta1_schedule(count):
+                frac = (
+                    1.0
+                    - (count // (config["num_minibatches"] * config["update_epochs"]))
+                    / config["num_updates"]
+                )
+                return config["beta_1"] * frac
+
             return (
                 obs,
                 state,
@@ -149,14 +164,21 @@ def make_train(config):
                 opt_state,
                 running_grad,
                 network,
-                tx,
                 lr_schedule,
+                beta1_schedule,
             )
 
         rng, _rng_setup = jax.random.split(rng)
-        obs, state, params, opt_state, running_grad, network, tx, lr_schedule = (
-            train_setup(_rng_setup)
-        )
+        (
+            obs,
+            state,
+            params,
+            opt_state,
+            running_grad,
+            network,
+            lr_schedule,
+            beta1_schedule,
+        ) = train_setup(_rng_setup)
 
         def _train_loop(runner_state, unused):
             initial_timesteps = runner_state.timesteps
@@ -217,6 +239,7 @@ def make_train(config):
                     cumulative_return=runner_state.cumulative_return,
                     timesteps=timesteps,
                     update_step=runner_state.update_step,
+                    mini_update_step=runner_state.mini_update_step,
                     rng=rng,
                 )
 
@@ -271,6 +294,7 @@ def make_train(config):
                 traj_batch = update_state.traj_batch
                 advantages = update_state.advantages
                 targets = update_state.targets
+                mini_update_step = update_state.mini_update_step
                 rng = update_state.rng
 
                 rng, _rng_permute = jax.random.split(rng)
@@ -279,7 +303,6 @@ def make_train(config):
                 shuffled_batch = jax.tree.map(  # (time, envs, ...)
                     lambda x: jnp.take(x, permutation, axis=1), batch
                 )
-
                 shuffled_batch_split = jax.tree.map(
                     lambda x: jnp.reshape(  # split into minibatches along actor dimension (dim 1)
                         x,
@@ -293,7 +316,7 @@ def make_train(config):
                 )
 
                 def _update_minibatch(carry, minibatch):
-                    params, opt_state, running_grad = carry
+                    params, opt_state, running_grad, mini_update_step = carry
                     traj_minibatch, advantages_minibatch, targets_minibatch = minibatch
 
                     def _loss(params, traj_minibatch, gae_minibatch, targets_minibatch):
@@ -363,33 +386,20 @@ def make_train(config):
                         targets_minibatch,
                     )
 
+                    # Create optimizer
+                    tx = optax.chain(
+                        optax.clip_by_global_norm(config["max_grad_norm"]),
+                        optax.adam(
+                            learning_rate=lr_schedule,
+                            eps=1e-5,
+                            b1=beta1_schedule(mini_update_step),
+                            b2=config["beta_2"],
+                        ),
+                    )
+
                     # Apply gradients
                     updates, updated_opt_state = tx.update(grads, opt_state)
                     new_params = optax.apply_updates(params, updates)
-
-                    # new_tx = optax.chain(
-                    #     optax.clip_by_global_norm(config["max_grad_norm"]),
-                    #     optax.adam(
-                    #         learning_rate=lr_schedule,
-                    #         eps=1e-5,
-                    #         b1=config["beta_1"],
-                    #         b2=config["beta_2"],
-                    #     ),
-                    # )
-
-                    # Reinitialize optimizer state with new beta1
-                    # new_opt_state = new_tx.init(new_params)
-                    # new_opt_state = (
-                    #     new_opt_state[0],  # empty state for global norm clip
-                    #     (
-                    #         optax.ScaleByAdamState(
-                    #             count=updated_opt_state[1][0].count,
-                    #             mu=updated_opt_state[1][0].mu,
-                    #             nu=updated_opt_state[1][0].nu,
-                    #         ),
-                    #         updated_opt_state[1][1],
-                    #     ),
-                    # )
 
                     # Calculate cosine similarity between current gradient and running gradient
                     def cosine_similarity(grad1, grad2):
@@ -414,7 +424,7 @@ def make_train(config):
                         return cosine_sim
 
                     cos_sim = cosine_similarity(grads, running_grad)
-                    # cos_sim_mu = cosine_similarity(grads, new_opt_state[1][0].mu)
+                    cos_sim_mu = cosine_similarity(grads, updated_opt_state[1][0].mu)
 
                     # Calculate angle between gradient vectors (in degrees)
                     cos_sim_clamped = jnp.clip(cos_sim, -1.0, 1.0)
@@ -424,32 +434,30 @@ def make_train(config):
                     # Update running gradient with current gradient
                     new_running_grad = grads
 
+                    total_loss[1]["beta1"] = beta1_schedule(mini_update_step)
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
-                    # total_loss[1]["mu_norm"] = pytree_norm(new_opt_state[1][0].mu)
-                    # total_loss[1]["nu_norm"] = pytree_norm(new_opt_state[1][0].nu)
+                    total_loss[1]["mu_norm"] = pytree_norm(updated_opt_state[1][0].mu)
+                    total_loss[1]["nu_norm"] = pytree_norm(updated_opt_state[1][0].nu)
                     total_loss[1]["cosine_similarity"] = cos_sim
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
-                    # total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
+                    total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
 
-                    # jprint(updated_opt_state[1][0][1])
+                    return (
+                        new_params,
+                        updated_opt_state,
+                        new_running_grad,
+                        mini_update_step + 1,
+                    ), total_loss
 
-                    # jprint("len(updated_opt_state[1][0])", len(updated_opt_state[1][0]))
-                    # jprint(
-                    #     "type(updated_opt_state[1][0])", type(updated_opt_state[1][0])
-                    # )
-                    # jprint("len(updated_opt_state[1][1])", len(updated_opt_state[1][1]))
-                    # jprint(
-                    #     "type(updated_opt_state[1][1])", type(updated_opt_state[1][1])
-                    # )
-
-                    return (new_params, updated_opt_state, new_running_grad), total_loss
-
-                (final_params, final_opt_state, final_running_grad), total_loss = (
-                    jax.lax.scan(
-                        _update_minibatch,
-                        (params, opt_state, running_grad),
-                        minibatches,
-                    )
+                (
+                    final_params,
+                    final_opt_state,
+                    final_running_grad,
+                    final_mini_update_step,
+                ), total_loss = jax.lax.scan(
+                    _update_minibatch,
+                    (params, opt_state, running_grad, mini_update_step),
+                    minibatches,
                 )
 
                 update_state = Updatestate(
@@ -459,6 +467,7 @@ def make_train(config):
                     traj_batch=traj_batch,
                     advantages=advantages,
                     targets=targets,
+                    mini_update_step=final_mini_update_step,
                     rng=rng,
                 )
 
@@ -471,6 +480,7 @@ def make_train(config):
                 traj_batch=traj_batch,
                 advantages=advantages,
                 targets=targets,
+                mini_update_step=runner_state.mini_update_step,
                 rng=rng,
             )
 
@@ -530,6 +540,7 @@ def make_train(config):
             )
             metric["return"] = returns_avg
             metric["episode_length"] = episode_length_avg
+            metric["mini_update_step"] = update_state.mini_update_step
             metric.update(loss_info)
 
             def callback(exp_id, metric):
@@ -548,6 +559,7 @@ def make_train(config):
                 cumulative_return=new_cumulative_return,
                 timesteps=runner_state.timesteps,
                 update_step=runner_state.update_step + 1,
+                mini_update_step=update_state.mini_update_step,
                 rng=runner_state.rng,
             )
 
@@ -566,6 +578,7 @@ def make_train(config):
             cumulative_return=cumulative_return,
             timesteps=jnp.zeros((config["num_envs"]), dtype=jnp.int32),
             update_step=0,
+            mini_update_step=0,
             rng=_train_rng,
         )
 
@@ -583,6 +596,7 @@ def make_train(config):
 @hydra.main(version_base=None, config_path="./", config_name="config_ppo_beta")
 def main(config):
     try:
+
         # vmap and compile
         config = OmegaConf.to_container(config)
         rng = jax.random.PRNGKey(config["seed"])
@@ -596,7 +610,9 @@ def main(config):
 
         # wandb
         job_type = f"{config['job_type']}_{config['env_name']}"
-        group = job_type + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
+        group = f"ppo_beta_{config['beta_1']}" + datetime.datetime.now().strftime(
+            "_%Y-%m-%d_%H-%M-%S"
+        )
         global LOGGER
         LOGGER = WandbMultiLogger(
             project=config["project"],
