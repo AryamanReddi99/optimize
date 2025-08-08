@@ -14,6 +14,7 @@ import gymnax
 from optimize.utils.jax_utils import pytree_norm
 import pickle
 import os
+from optimize.utils.jax_utils import jprint
 
 
 class Transition(NamedTuple):
@@ -46,6 +47,32 @@ class Updatestate(NamedTuple):
     advantages: jnp.ndarray
     targets: jnp.ndarray
     rng: Array
+
+
+def save_model(
+    params,
+    config,
+    exp_id,
+    models_dir,
+):
+    """Save the trained model parameters."""
+    os.makedirs(models_dir, exist_ok=True)
+
+    # Create a unique filename based on config and experiment ID
+    model_path = os.path.join(models_dir, exp_id)
+
+    # Save model data
+    model_data = {
+        "params": params,
+        "config": config,
+        "env_name": config["env_name"],
+        "exp_id": exp_id,
+    }
+
+    with open(model_path, "wb") as f:
+        pickle.dump(model_data, f)
+
+    return model_path
 
 
 def make_train(config):
@@ -373,6 +400,8 @@ def make_train(config):
                     total_loss[1]["cosine_similarity"] = cos_sim
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
                     total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
+
+                    jprint(train_state.opt_state[1][1])
                     return (train_state, new_running_grad), total_loss
 
                 (final_train_state, final_running_grad), total_loss = jax.lax.scan(

@@ -10,7 +10,7 @@ from optimize.networks.mlp import ActorCriticDiscrete
 import numpy as np
 import optax
 import gymnax
-from optimize.utils.jax_utils import pytree_norm
+from optimize.utils.jax_utils import pytree_norm, jprint
 import pickle
 import os
 
@@ -276,17 +276,18 @@ def make_train(config):
                 rng, _rng_permute = jax.random.split(rng)
                 permutation = jax.random.permutation(_rng_permute, config["num_envs"])
                 batch = (traj_batch, advantages.squeeze(), targets.squeeze())
-                shuffled_batch = jax.tree.map(
+                shuffled_batch = jax.tree.map(  # (time, envs, ...)
                     lambda x: jnp.take(x, permutation, axis=1), batch
                 )
+
                 shuffled_batch_split = jax.tree.map(
-                    lambda x: jnp.reshape(
+                    lambda x: jnp.reshape(  # split into minibatches along actor dimension (dim 1)
                         x,
                         [x.shape[0], config["num_minibatches"], -1] + list(x.shape[2:]),
                     ),
                     shuffled_batch,
                 )
-                minibatches = jax.tree.map(
+                minibatches = jax.tree.map(  # swap minibatch and time axis,
                     lambda x: jnp.swapaxes(x, 0, 1),
                     shuffled_batch_split,
                 )
@@ -366,29 +367,29 @@ def make_train(config):
                     updates, updated_opt_state = tx.update(grads, opt_state)
                     new_params = optax.apply_updates(params, updates)
 
-                    new_tx = optax.chain(
-                        optax.clip_by_global_norm(config["max_grad_norm"]),
-                        optax.adam(
-                            learning_rate=lr_schedule,
-                            eps=1e-5,
-                            b1=config["beta_1"],
-                            b2=config["beta_2"],
-                        ),
-                    )
+                    # new_tx = optax.chain(
+                    #     optax.clip_by_global_norm(config["max_grad_norm"]),
+                    #     optax.adam(
+                    #         learning_rate=lr_schedule,
+                    #         eps=1e-5,
+                    #         b1=config["beta_1"],
+                    #         b2=config["beta_2"],
+                    #     ),
+                    # )
 
                     # Reinitialize optimizer state with new beta1
-                    new_opt_state = new_tx.init(new_params)
-                    new_opt_state = (
-                        new_opt_state[0],
-                        (
-                            optax.ScaleByAdamState(
-                                count=updated_opt_state[1][0].count,
-                                mu=updated_opt_state[1][0].mu,
-                                nu=updated_opt_state[1][0].nu,
-                            ),
-                            updated_opt_state[1][1],
-                        ),
-                    )
+                    # new_opt_state = new_tx.init(new_params)
+                    # new_opt_state = (
+                    #     new_opt_state[0],  # empty state for global norm clip
+                    #     (
+                    #         optax.ScaleByAdamState(
+                    #             count=updated_opt_state[1][0].count,
+                    #             mu=updated_opt_state[1][0].mu,
+                    #             nu=updated_opt_state[1][0].nu,
+                    #         ),
+                    #         updated_opt_state[1][1],
+                    #     ),
+                    # )
 
                     # Calculate cosine similarity between current gradient and running gradient
                     def cosine_similarity(grad1, grad2):
@@ -413,7 +414,7 @@ def make_train(config):
                         return cosine_sim
 
                     cos_sim = cosine_similarity(grads, running_grad)
-                    cos_sim_mu = cosine_similarity(grads, new_opt_state[1][0].mu)
+                    # cos_sim_mu = cosine_similarity(grads, new_opt_state[1][0].mu)
 
                     # Calculate angle between gradient vectors (in degrees)
                     cos_sim_clamped = jnp.clip(cos_sim, -1.0, 1.0)
@@ -424,12 +425,24 @@ def make_train(config):
                     new_running_grad = grads
 
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
-                    total_loss[1]["mu_norm"] = pytree_norm(new_opt_state[1][0].mu)
-                    total_loss[1]["nu_norm"] = pytree_norm(new_opt_state[1][0].nu)
+                    # total_loss[1]["mu_norm"] = pytree_norm(new_opt_state[1][0].mu)
+                    # total_loss[1]["nu_norm"] = pytree_norm(new_opt_state[1][0].nu)
                     total_loss[1]["cosine_similarity"] = cos_sim
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
-                    total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
-                    return (new_params, new_opt_state, new_running_grad), total_loss
+                    # total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
+
+                    # jprint(updated_opt_state[1][0][1])
+
+                    # jprint("len(updated_opt_state[1][0])", len(updated_opt_state[1][0]))
+                    # jprint(
+                    #     "type(updated_opt_state[1][0])", type(updated_opt_state[1][0])
+                    # )
+                    # jprint("len(updated_opt_state[1][1])", len(updated_opt_state[1][1]))
+                    # jprint(
+                    #     "type(updated_opt_state[1][1])", type(updated_opt_state[1][1])
+                    # )
+
+                    return (new_params, updated_opt_state, new_running_grad), total_loss
 
                 (final_params, final_opt_state, final_running_grad), total_loss = (
                     jax.lax.scan(
