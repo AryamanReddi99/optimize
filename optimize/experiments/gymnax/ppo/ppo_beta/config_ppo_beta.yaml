@@ -25,7 +25,7 @@ num_seeds: 10
 
 # wandb 
 project: optimize
-job_type: ppo_beta_increase
+job_type: ppo_beta_decay
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta/models"
 wandb_mode: "online" # online, disabled

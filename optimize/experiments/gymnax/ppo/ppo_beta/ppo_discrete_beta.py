@@ -155,7 +155,7 @@ def make_train(config):
                     - (count // (config["num_minibatches"] * config["update_epochs"]))
                     / config["num_updates"]
                 )
-                return config["beta_1"] * (1 - frac)
+                return config["beta_1"] * frac
 
             return (
                 obs,
