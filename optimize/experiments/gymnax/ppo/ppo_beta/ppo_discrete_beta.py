@@ -424,6 +424,7 @@ def make_train(config):
                         return cosine_sim
 
                     cos_sim = cosine_similarity(grads, running_grad)
+                    cos_sim_mu_prev = cosine_similarity(grads, opt_state[1][0].mu)
                     cos_sim_mu = cosine_similarity(grads, updated_opt_state[1][0].mu)
 
                     # Calculate angle between gradient vectors (in degrees)
@@ -446,7 +447,7 @@ def make_train(config):
                         new_params,
                         updated_opt_state,
                         new_running_grad,
-                        mini_update_step + 1,
+                        mini_update_step + 1,  # same as adam counter
                     ), total_loss
 
                 (
@@ -522,10 +523,24 @@ def make_train(config):
 
             _, episode_lengths = jax.lax.scan(_episode_lengths, initial_timesteps, done)
 
-            only_episode_ends = jnp.where(done, episode_lengths, 0)
+            # Calculate average episode length from completed episodes
+            only_episode_ends = jnp.where(
+                done, episode_lengths, 0
+            )  # only lengths at done steps
             episode_length_avg = jnp.where(
                 done.sum() > 0, only_episode_ends.sum() / done.sum(), 0.0
             )
+
+            # log network stats
+            network_leaves = jax.tree.leaves(update_state.train_state.params)
+            flat_network = jnp.concatenate([jnp.ravel(x) for x in network_leaves])
+            network_l1 = jnp.sum(jnp.abs(flat_network))
+            network_l2 = jnp.linalg.norm(flat_network)
+            network_linfty = jnp.max(jnp.abs(flat_network))
+            network_mu = jnp.mean(flat_network)
+            network_std = jnp.std(flat_network)
+            network_max = jnp.max(flat_network)
+            network_min = jnp.min(flat_network)
 
             # log info
             total_loss, loss_info = loss_info
@@ -541,6 +556,13 @@ def make_train(config):
             metric["return"] = returns_avg
             metric["episode_length"] = episode_length_avg
             metric["mini_update_step"] = update_state.mini_update_step
+            metric["network_l1"] = network_l1
+            metric["network_l2"] = network_l2
+            metric["network_linfty"] = network_linfty
+            metric["network_mu"] = network_mu
+            metric["network_std"] = network_std
+            metric["network_max"] = network_max
+            metric["network_min"] = network_min
             metric.update(loss_info)
 
             def callback(exp_id, metric):
@@ -630,11 +652,6 @@ def main(config):
     finally:
         LOGGER.finish()
         print("Finished.")
-
-        # Save the final models
-        if config["save_model"]:
-            model_path = save_model(out[0].params, config, group, config["models_dir"])
-            print(f"Models saved to: {model_path}")
 
 
 if __name__ == "__main__":

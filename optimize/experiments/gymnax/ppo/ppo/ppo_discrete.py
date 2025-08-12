@@ -1,3 +1,8 @@
+import os
+
+# disable randomness
+os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+
 import jax
 import jax.numpy as jnp
 import hydra
@@ -11,10 +16,8 @@ from optimize.networks.mlp import ActorCriticDiscrete
 import numpy as np
 import optax
 import gymnax
-from optimize.utils.jax_utils import pytree_norm
+from optimize.utils.jax_utils import pytree_norm, jprint
 import pickle
-import os
-from optimize.utils.jax_utils import jprint
 
 
 class Transition(NamedTuple):
@@ -351,6 +354,11 @@ def make_train(config):
                         targets_minibatch,
                     )
 
+                    # Update optimizer & train state
+                    updated_train_state = train_state.apply_gradients(
+                        grads=grads,
+                    )
+
                     # Calculate cosine similarity between current gradient and running gradient
                     def cosine_similarity(grad1, grad2):
                         # Flatten gradients for cosine similarity calculation
@@ -374,8 +382,11 @@ def make_train(config):
                         return cosine_sim
 
                     cos_sim = cosine_similarity(grads, running_grad)
-                    cos_sim_mu = cosine_similarity(
+                    cos_sim_mu_prev = cosine_similarity(
                         grads, train_state.opt_state[1][0].mu
+                    )
+                    cos_sim_mu = cosine_similarity(
+                        grads, updated_train_state.opt_state[1][0].mu
                     )
 
                     # Calculate angle between gradient vectors (in degrees)
@@ -383,26 +394,21 @@ def make_train(config):
                     gradient_angle_rad = jnp.arccos(cos_sim_clamped)
                     gradient_angle_deg = gradient_angle_rad * 180.0 / jnp.pi
 
-                    train_state = train_state.apply_gradients(
-                        grads=grads,
-                    )
-
                     # Update running gradient with current gradient
                     new_running_grad = grads
 
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
                     total_loss[1]["mu_norm"] = pytree_norm(
-                        train_state.opt_state[1][0].mu
+                        updated_train_state.opt_state[1][0].mu
                     )
                     total_loss[1]["nu_norm"] = pytree_norm(
-                        train_state.opt_state[1][0].nu
+                        updated_train_state.opt_state[1][0].nu
                     )
                     total_loss[1]["cosine_similarity"] = cos_sim
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
                     total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
 
-                    jprint(train_state.opt_state[1][1])
-                    return (train_state, new_running_grad), total_loss
+                    return (updated_train_state, new_running_grad), total_loss
 
                 (final_train_state, final_running_grad), total_loss = jax.lax.scan(
                     _update_minibatch,
