@@ -532,7 +532,7 @@ def make_train(config):
             )
 
             # log network stats
-            network_leaves = jax.tree.leaves(update_state.train_state.params)
+            network_leaves = jax.tree.leaves(update_state.params)
             flat_network = jnp.concatenate([jnp.ravel(x) for x in network_leaves])
             network_l1 = jnp.sum(jnp.abs(flat_network))
             network_l2 = jnp.linalg.norm(flat_network)
