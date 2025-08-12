@@ -155,7 +155,7 @@ def make_train(config):
                     - (count // (config["num_minibatches"] * config["update_epochs"]))
                     / config["num_updates"]
                 )
-                return config["beta_1"] * frac
+                return config["beta_1"] * (1 - frac)
 
             return (
                 obs,
@@ -440,6 +440,7 @@ def make_train(config):
                     total_loss[1]["mu_norm"] = pytree_norm(updated_opt_state[1][0].mu)
                     total_loss[1]["nu_norm"] = pytree_norm(updated_opt_state[1][0].nu)
                     total_loss[1]["cosine_similarity"] = cos_sim
+                    total_loss[1]["cosine_similarity_mu_prev"] = cos_sim_mu_prev
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
                     total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
 
