@@ -41,6 +41,7 @@ class RunnerState(NamedTuple):
     timesteps: jnp.ndarray
     update_step: int
     mini_update_step: int
+    beta_1: float
     rng: Array
 
 
@@ -52,6 +53,7 @@ class Updatestate(NamedTuple):
     advantages: jnp.ndarray
     targets: jnp.ndarray
     mini_update_step: int
+    beta_1: float
     rng: Array
 
 
@@ -284,6 +286,7 @@ def make_train(config):
                     timesteps=timesteps,
                     update_step=runner_state.update_step,
                     mini_update_step=runner_state.mini_update_step,
+                    beta_1=runner_state.beta_1,
                     rng=rng,
                 )
 
@@ -339,6 +342,7 @@ def make_train(config):
                 advantages = update_state.advantages
                 targets = update_state.targets
                 mini_update_step = update_state.mini_update_step
+                beta_1 = update_state.beta_1
                 rng = update_state.rng
 
                 rng, _rng_permute = jax.random.split(rng)
@@ -435,17 +439,13 @@ def make_train(config):
                     cos_sim_mu_prev = cosine_similarity(grads, opt_state[1][0].mu)
 
                     # Create optimizer
-                    learning_rate = scalable_linear_schedule(jnp.exp(cos_sim_mu_prev))(
-                        mini_update_step
-                    )
+                    learning_rate = scalable_linear_schedule(1.0)(mini_update_step)
                     tx = optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
                         optax.adam(
-                            learning_rate=scalable_linear_schedule(
-                                jnp.exp(cos_sim_mu_prev)
-                            ),
+                            learning_rate=scalable_linear_schedule(1.0),
                             eps=1e-5,
-                            b1=beta1_schedule(mini_update_step),
+                            b1=beta_1,
                             b2=config["beta_2"],
                         ),
                     )
@@ -464,7 +464,7 @@ def make_train(config):
                     # Update running gradient with current gradient
                     new_running_grad = grads
 
-                    total_loss[1]["beta1"] = beta1_schedule(mini_update_step)
+                    total_loss[1]["beta1"] = beta_1
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
                     total_loss[1]["update_norm"] = pytree_norm(updates)
                     total_loss[1]["mu_norm"] = pytree_norm(updated_opt_state[1][0].mu)
@@ -493,6 +493,12 @@ def make_train(config):
                     minibatches,
                 )
 
+                css_mu_prev = total_loss[1]["cosine_similarity_mu_prev"].mean()
+                beta_1_new = jnp.exp(-config["beta_exp_scale"] * css_mu_prev)
+                beta_1_new = jnp.clip(
+                    beta_1_new, config["beta_1_min"], config["beta_1_max"]
+                )
+
                 update_state = Updatestate(
                     params=final_params,
                     opt_state=final_opt_state,
@@ -501,6 +507,7 @@ def make_train(config):
                     advantages=advantages,
                     targets=targets,
                     mini_update_step=final_mini_update_step,
+                    beta_1=beta_1_new,
                     rng=rng,
                 )
 
@@ -514,6 +521,7 @@ def make_train(config):
                 advantages=advantages,
                 targets=targets,
                 mini_update_step=runner_state.mini_update_step,
+                beta_1=runner_state.beta_1,
                 rng=rng,
             )
 
@@ -614,6 +622,7 @@ def make_train(config):
                 timesteps=runner_state.timesteps,
                 update_step=runner_state.update_step + 1,
                 mini_update_step=update_state.mini_update_step,
+                beta_1=update_state.beta_1,
                 rng=runner_state.rng,
             )
 
@@ -633,6 +642,7 @@ def make_train(config):
             timesteps=jnp.zeros((config["num_envs"]), dtype=jnp.int32),
             update_step=0,
             mini_update_step=0,
+            beta_1=config["beta_1"],
             rng=_train_rng,
         )
 
@@ -647,7 +657,7 @@ def make_train(config):
     return train
 
 
-@hydra.main(version_base=None, config_path="./", config_name="config_ppo_grad")
+@hydra.main(version_base=None, config_path="./", config_name="config_ppo_beta_scale")
 def main(config):
     try:
 
