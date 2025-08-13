@@ -494,7 +494,8 @@ def make_train(config):
                 )
 
                 css_mu_prev = total_loss[1]["cosine_similarity_mu_prev"].mean()
-                beta_1_new = jnp.exp(-config["beta_exp_scale"] * css_mu_prev)
+                css = total_loss[1]["cosine_similarity"].mean()
+                beta_1_new = jnp.exp(-config["beta_exp_scale"] * css)
                 beta_1_new = jnp.clip(
                     beta_1_new, config["beta_1_min"], config["beta_1_max"]
                 )
