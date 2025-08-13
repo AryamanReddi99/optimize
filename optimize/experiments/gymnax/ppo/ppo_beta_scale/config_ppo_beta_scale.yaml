@@ -29,7 +29,7 @@ num_seeds: 5
 
 # wandb 
 project: optimize
-job_type: ppo_beta_scale
+job_type: ppo_beta_scale_css_mu_prev_backward_exp
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta_scale/models"
 wandb_mode: "online" # online, disabled
