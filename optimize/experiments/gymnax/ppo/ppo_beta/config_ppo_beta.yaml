@@ -17,7 +17,7 @@ num_steps: 4000
 "scale_clip_eps": False
 "beta_1": 0.9
 "beta_2": 0.999
-"beta_1_schedule": "decay" # constant, decay, increase
+"beta_1_schedule": "increase" # constant, decay, increase
 "reset_beta1": True
 
 # env
@@ -27,7 +27,7 @@ num_seeds: 5
 
 # wandb 
 project: optimize
-job_type: ppo_reset_mu_decay
+job_type: ppo_reset_mu_increase
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta/models"
-wandb_mode: "disabled" # online, disabled
+wandb_mode: "online" # online, disabled
