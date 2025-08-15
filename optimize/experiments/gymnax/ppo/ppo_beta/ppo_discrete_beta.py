@@ -149,13 +149,70 @@ def make_train(config):
             running_grad = jax.tree.map(jnp.zeros_like, network_params)
 
             # Beta 1 schedule
-            def beta1_schedule(count):
-                frac = (
-                    1.0
-                    - (count // (config["num_minibatches"] * config["update_epochs"]))
-                    / config["num_updates"]
-                )
-                return config["beta_1"] * frac
+            if config["beta_1_schedule"] == "constant":
+                if config["reset_beta1"]:  
+                    def beta1_schedule(count):
+                        return jnp.where(
+                            count == 0,
+                            config["beta_1"],
+                            jnp.where(
+                                count % (config["num_minibatches"] * config["update_epochs"]) == 0,
+                                0.0,
+                                config["beta_1"]
+                            )
+                        )
+                else:
+                    def beta1_schedule(count):
+                        return config["beta_1"]
+
+            elif config["beta_1_schedule"] == "decay":
+                if config["reset_beta1"]:
+                    def beta1_schedule(count):
+                        frac = (
+                            count // (config["num_minibatches"] * config["update_epochs"])
+                        ) / config["num_updates"]
+                        return jnp.where(
+                            count == 0,
+                            config["beta_1"] * frac,
+                            jnp.where(
+                                count % (config["num_minibatches"] * config["update_epochs"]) == 0,
+                                0.0,
+                                config["beta_1"] * frac
+                            )
+                        )
+                else:
+                    def beta1_schedule(count):
+                        frac = (
+                            1.0
+                            - (
+                                count
+                                // (config["num_minibatches"] * config["update_epochs"])
+                            )
+                            / config["num_updates"]
+                        )
+                        return config["beta_1"] * frac
+
+            elif config["beta_1_schedule"] == "increase":
+                if config["reset_beta1"]:
+                    def beta1_schedule(count):
+                        frac = (
+                            count // (config["num_minibatches"] * config["update_epochs"])
+                        ) / config["num_updates"]
+                        return jnp.where(
+                            count == 0,
+                            config["beta_1"] * (1 - frac),
+                            jnp.where(
+                                count % (config["num_minibatches"] * config["update_epochs"]) == 0,
+                                0.0,
+                                config["beta_1"] * (1 - frac)
+                            )
+                        )
+                else:
+                    def beta1_schedule(count):
+                        frac = (
+                            count // (config["num_minibatches"] * config["update_epochs"])
+                        ) / config["num_updates"]
+                        return config["beta_1"] * (1 - frac)
 
             return (
                 obs,
@@ -179,6 +236,26 @@ def make_train(config):
             lr_schedule,
             beta1_schedule,
         ) = train_setup(_rng_setup)
+
+        # Calculate cosine similarity between current gradient and running gradient
+        def cosine_similarity(grad1, grad2):
+            # Flatten gradients for cosine similarity calculation
+            flat_grad1 = jax.tree.leaves(grad1)
+            flat_grad2 = jax.tree.leaves(grad2)
+
+            # Concatenate all gradients
+            vec1 = jnp.concatenate([jnp.ravel(x) for x in flat_grad1])
+            vec2 = jnp.concatenate([jnp.ravel(x) for x in flat_grad2])
+
+            # Calculate cosine similarity
+            dot_product = jnp.dot(vec1, vec2)
+            norm1 = jnp.linalg.norm(vec1)
+            norm2 = jnp.linalg.norm(vec2)
+
+            # Avoid division by zero
+            denominator = norm1 * norm2
+            cosine_sim = jnp.where(denominator > 1e-8, dot_product / denominator, 0.0)
+            return cosine_sim
 
         def _train_loop(runner_state, unused):
             initial_timesteps = runner_state.timesteps
@@ -386,6 +463,11 @@ def make_train(config):
                         targets_minibatch,
                     )
 
+                    # Stats
+                    cos_sim = cosine_similarity(grads, running_grad)
+                    cos_sim_mu_prev = cosine_similarity(grads, opt_state[1][0].mu)
+
+                    
                     # Create optimizer
                     tx = optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
@@ -401,27 +483,7 @@ def make_train(config):
                     updates, updated_opt_state = tx.update(grads, opt_state)
                     new_params = optax.apply_updates(params, updates)
 
-                    # Calculate cosine similarity between current gradient and running gradient
-                    def cosine_similarity(grad1, grad2):
-                        # Flatten gradients for cosine similarity calculation
-                        flat_grad1 = jax.tree.leaves(grad1)
-                        flat_grad2 = jax.tree.leaves(grad2)
-
-                        # Concatenate all gradients
-                        vec1 = jnp.concatenate([jnp.ravel(x) for x in flat_grad1])
-                        vec2 = jnp.concatenate([jnp.ravel(x) for x in flat_grad2])
-
-                        # Calculate cosine similarity
-                        dot_product = jnp.dot(vec1, vec2)
-                        norm1 = jnp.linalg.norm(vec1)
-                        norm2 = jnp.linalg.norm(vec2)
-
-                        # Avoid division by zero
-                        denominator = norm1 * norm2
-                        cosine_sim = jnp.where(
-                            denominator > 1e-8, dot_product / denominator, 0.0
-                        )
-                        return cosine_sim
+                    
 
                     cos_sim = cosine_similarity(grads, running_grad)
                     cos_sim_mu_prev = cosine_similarity(grads, opt_state[1][0].mu)
@@ -437,12 +499,14 @@ def make_train(config):
 
                     total_loss[1]["beta1"] = beta1_schedule(mini_update_step)
                     total_loss[1]["grad_norm"] = pytree_norm(grads)
+                    total_loss[1]["update_norm"] = pytree_norm(updates)
                     total_loss[1]["mu_norm"] = pytree_norm(updated_opt_state[1][0].mu)
                     total_loss[1]["nu_norm"] = pytree_norm(updated_opt_state[1][0].nu)
                     total_loss[1]["cosine_similarity"] = cos_sim
                     total_loss[1]["cosine_similarity_mu_prev"] = cos_sim_mu_prev
                     total_loss[1]["gradient_angle_deg"] = gradient_angle_deg
                     total_loss[1]["cosine_similarity_mu"] = cos_sim_mu
+                    total_loss[1]["learning_rate"] = lr_schedule(mini_update_step)
 
                     return (
                         new_params,

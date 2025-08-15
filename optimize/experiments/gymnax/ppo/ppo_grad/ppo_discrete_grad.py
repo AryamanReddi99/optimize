@@ -435,14 +435,14 @@ def make_train(config):
                     cos_sim_mu_prev = cosine_similarity(grads, opt_state[1][0].mu)
 
                     # Create optimizer
-                    learning_rate = scalable_linear_schedule(jnp.exp(cos_sim_mu_prev))(
+                    learning_rate = scalable_linear_schedule(jnp.exp(cos_sim))(
                         mini_update_step
                     )
                     tx = optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
                         optax.adam(
                             learning_rate=scalable_linear_schedule(
-                                jnp.exp(cos_sim_mu_prev)
+                                jnp.exp(cos_sim)
                             ),
                             eps=1e-5,
                             b1=beta1_schedule(mini_update_step),

@@ -158,30 +158,62 @@ def make_train(config):
 
             # Beta 1 schedule
             if config["beta_1_schedule"] == "constant":
-
-                def beta1_schedule(count):
-                    return config["beta_1"]
+                if config["reset_beta1"]:  
+                    def beta1_schedule(count):
+                        return jnp.where(
+                            count % (config["num_minibatches"] * config["update_epochs"]) == 0,
+                            0.0,
+                            config["beta_1"]
+                        )
+                else:
+                    def beta1_schedule(count):
+                        return config["beta_1"]
 
             elif config["beta_1_schedule"] == "decay":
-
-                def beta1_schedule(count):
-                    frac = (
-                        1.0
-                        - (
-                            count
-                            // (config["num_minibatches"] * config["update_epochs"])
+                if config["reset_beta1"]:
+                    def beta1_schedule(count):
+                        frac = (
+                            1.0
+                            - (
+                                count
+                                // (config["num_minibatches"] * config["update_epochs"])
+                            )
+                            / config["num_updates"]
                         )
-                        / config["num_updates"]
-                    )
-                    return config["beta_1"] * frac
+                        return jnp.where(
+                            (count > 0) and (count % (config["num_minibatches"] * config["update_epochs"]) == 0),
+                            0.0,
+                            config["beta_1"] * frac
+                        )
+                else:
+                    def beta1_schedule(count):
+                        frac = (
+                            1.0
+                            - (
+                                count
+                                // (config["num_minibatches"] * config["update_epochs"])
+                            )
+                            / config["num_updates"]
+                        )
+                        return config["beta_1"] * frac
 
             elif config["beta_1_schedule"] == "increase":
-
-                def beta1_schedule(count):
-                    frac = (
-                        count // (config["num_minibatches"] * config["update_epochs"])
-                    ) / config["num_updates"]
-                    return config["beta_1"] * (1 - frac)
+                if config["reset_beta1"]:
+                    def beta1_schedule(count):
+                        frac = (
+                            count // (config["num_minibatches"] * config["update_epochs"])
+                        ) / config["num_updates"]
+                        return jnp.where(
+                            (count > 0) and (count % (config["num_minibatches"] * config["update_epochs"]) == 0),
+                            0.0,
+                            config["beta_1"] * (1 - frac)
+                        )
+                else:
+                    def beta1_schedule(count):
+                        frac = (
+                            count // (config["num_minibatches"] * config["update_epochs"])
+                        ) / config["num_updates"]
+                        return config["beta_1"] * (1 - frac)
 
             return (
                 obs,

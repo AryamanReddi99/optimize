@@ -17,15 +17,17 @@ num_steps: 4000
 "scale_clip_eps": False
 "beta_1": 0.9
 "beta_2": 0.999
+"beta_1_schedule": "decay" # constant, decay, increase
+"reset_beta1": True
 
 # env
 env_name: "MountainCar-v0"
 seed: 0
-num_seeds: 10
+num_seeds: 5
 
 # wandb 
 project: optimize
-job_type: ppo_beta_decay
+job_type: ppo_reset_mu_decay
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta/models"
-wandb_mode: "online" # online, disabled
+wandb_mode: "disabled" # online, disabled
