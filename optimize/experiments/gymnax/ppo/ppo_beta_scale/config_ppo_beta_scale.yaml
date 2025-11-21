@@ -18,6 +18,7 @@ num_steps: 4000
 "beta_1": 0.9
 "beta_2": 0.999
 "beta_1_schedule": "constant" # constant, decay, increase
+"reset_beta1": True
 "beta_1_max": 0.999
 "beta_1_min": 0.8
 "beta_exp_scale": 0.01
@@ -29,7 +30,7 @@ num_seeds: 5
 
 # wandb 
 project: optimize
-job_type: ppo_beta_scale_css_mu_prev_backward_exp_slow
+job_type: TEST_ppo_beta_scale_css_mu_prev_backward_exp_slow
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo_beta_scale/models"
 wandb_mode: "online" # online, disabled

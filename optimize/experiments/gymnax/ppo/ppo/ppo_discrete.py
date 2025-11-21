@@ -1,7 +1,7 @@
 import os
 
-# disable randomness
-os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+# # disable randomness
+# os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
 
 import jax
 import jax.numpy as jnp
@@ -577,9 +577,8 @@ def main(config):
 
         # wandb
         job_type = f"{config['job_type']}_{config['env_name']}"
-        group = (
-            f"ppo_beta1_{config['beta_1']}_{config['env_name']}"
-            + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
+        group = config["job_type"] + datetime.datetime.now().strftime(
+            "_%Y-%m-%d_%H-%M-%S"
         )
         global LOGGER
         LOGGER = WandbMultiLogger(
