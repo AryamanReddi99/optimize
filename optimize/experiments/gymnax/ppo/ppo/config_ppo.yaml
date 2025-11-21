@@ -1,10 +1,10 @@
-total_timesteps: 200
+total_timesteps: 4e7
 num_envs: 16
-num_steps: 1e6
+num_steps: 4000
 "lr": 4e-3
 "optimizer": "adam" # adam, rmsprop, sgd
 "anneal_lr": True
-"update_epochs": 1
+"update_epochs": 64
 "num_minibatches": 4
 "gamma": 0.99
 "gae_lambda": 0.95
