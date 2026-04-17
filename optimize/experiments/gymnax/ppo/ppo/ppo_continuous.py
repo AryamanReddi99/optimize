@@ -11,7 +11,7 @@ from typing import Any, NamedTuple
 from omegaconf import OmegaConf
 import datetime
 from optimize.utils.wandb_multilogger import WandbMultiLogger
-from optimize.networks.mlp import ActorDiscrete, CriticDiscrete
+from optimize.networks.mlp import ActorContinuous, CriticContinuous
 from optimize.utils.typing import BoolArray, FloatArray, IntArray, PRNGKeyArray
 import numpy as np
 import optax
@@ -22,7 +22,7 @@ import pickle
 
 class Transition(NamedTuple):
     obs: FloatArray
-    action: IntArray
+    action: FloatArray
     log_prob: FloatArray
     reward: FloatArray
     done: BoolArray
@@ -136,12 +136,14 @@ def make_train(config):
             tx_actor = make_tx(lr_schedule_actor)
             tx_critic = make_tx(lr_schedule_critic)
 
-            actor = ActorDiscrete(
-                action_dim=env.num_actions,
+            # Gymnax: `num_actions` is the continuous action dimension for control envs.
+            action_dim = int(env.num_actions)
+            actor = ActorContinuous(
+                action_dim=action_dim,
                 activation=config["activation"],
                 hidden_dim=config["fc_dim_size"],
             )
-            critic = CriticDiscrete(
+            critic = CriticContinuous(
                 activation=config["activation"],
                 hidden_dim=config["fc_dim_size"],
             )
@@ -229,7 +231,7 @@ def make_train(config):
 
                 transition = Transition(
                     obs=obs,
-                    action=action.squeeze(),
+                    action=action,
                     log_prob=log_prob,
                     reward=reward,
                     done=done,
@@ -258,7 +260,7 @@ def make_train(config):
                 _env_step,
                 runner_state,
                 None,
-                config["num_update_steps"],
+                config["num_steps_per_env_per_update"],
             )
 
             # advantages
@@ -604,7 +606,7 @@ def make_train(config):
     return train
 
 
-@hydra.main(version_base=None, config_path="./", config_name="config_ppo_discrete")
+@hydra.main(version_base=None, config_path="./", config_name="config_ppo_continuous")
 def main(config):
     try:
         # vmap and compile

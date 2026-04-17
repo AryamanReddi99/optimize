@@ -1,31 +1,33 @@
-total_timesteps: 4e7
-num_envs: 16
-num_steps: 4000
-"lr": 4e-3
-"optimizer": "adam" # adam, rmsprop, sgd
-"anneal_lr": True
-"update_epochs": 64
-"num_minibatches": 4
+total_timesteps: 1e7
+num_envs: 20
+num_steps_per_env_per_update: 1000
+num_epochs: 5
+num_minibatches: 5
+
 "gamma": 0.99
 "gae_lambda": 0.95
 "clip_eps": 0.2
-"ent_coef": 0.003
+"ent_coef": 0.0
 "vf_coef": 0.5
-"max_grad_norm": 1.0
 "activation": "relu"
 "fc_dim_size": 128
 "scale_clip_eps": False
-"beta_1": 0.1
+
+"optimizer": "adam" # adam, rmsprop, sgd — applied to both actor and critic
+"lr_actor": 2e-3
+"lr_critic": 4e-3
+"anneal_lr": True
+"max_grad_norm": 1.0
+"beta_1": 0.9
 "beta_2": 0.999
 
-# env
 env_name: "MountainCar-v0"
 seed: 0
-num_seeds: 10
+num_seeds: 5
 
 # wandb
 project: optimize
-job_type: ppo_test
+job_type: ppo
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo/models"
-wandb_mode: "online" # online, disabled
+wandb: True
