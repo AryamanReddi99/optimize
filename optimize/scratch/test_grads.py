@@ -12,8 +12,9 @@ axis ``NUM_STEPS``:
 import jax
 import jax.numpy as jnp
 import optax
-from optimize.utils.jax_utils import pytree_norm
-from optimize.optimizers.adam import adam
+
+# from optimize.utils.jax_utils import pytree_norm
+# from optimize.optimizers.adam import adam
 import matplotlib.pyplot as plt
 
 B1 = 0.9
@@ -34,7 +35,8 @@ def loss_fun(params):
 
 def run_gradient_descent_scan():
     params = {"a1": jnp.array(0.0), "a2": jnp.array(0.0)}
-    tx = adam(learning_rate=LR, b1=B1, b2=B2)
+    # tx = adam(learning_rate=LR, b1=B1, b2=B2)
+    tx = optax.adam(learning_rate=LR, b1=B1, b2=B2)
     opt_state = tx.init(params)
 
     def step(carry, _):
@@ -63,7 +65,7 @@ def run_gradient_descent_scan():
             "nu_hat": nu_hat,
             "grads": grads,
             "updates": updates,
-            "update_norm": pytree_norm(updates),
+            # "update_norm": pytree_norm(updates),
         }
         return (new_params, new_opt_state), record
 
@@ -86,8 +88,8 @@ if __name__ == "__main__":
     print("nu[a1]:", history["nu"]["a1"])
     print("nu_hat[a1]:", history["nu_hat"]["a1"])
     print("updates[a1]:", history["updates"]["a1"])
-    print("update_norm:", history["update_norm"])
+    # print("update_norm:", history["update_norm"])
     print("final_params:", final_params)
 
-    plt.plot(history["update_norm"])
-    plt.show()
+    # plt.plot(history["update_norm"])
+    # plt.show()
