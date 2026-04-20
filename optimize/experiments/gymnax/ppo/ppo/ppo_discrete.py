@@ -10,6 +10,7 @@ from flax.training.train_state import TrainState
 from typing import Any, NamedTuple
 from omegaconf import OmegaConf
 import datetime
+from optimize.optimizers.optimizers import myano
 from optimize.utils.wandb_multilogger import WandbMultiLogger
 from optimize.networks.mlp import ActorDiscrete, CriticDiscrete
 from optimize.utils.typing import BoolArray, FloatArray, IntArray, PRNGKeyArray
@@ -87,7 +88,9 @@ def make_train(config):
     env, env_params = gymnax.make(config["env_name"])
 
     # config
-    config["batch_shuffle_dim"] = config["num_steps_per_env_per_update"] * config["num_envs"]
+    config["batch_shuffle_dim"] = (
+        config["num_steps_per_env_per_update"] * config["num_envs"]
+    )
 
     def train(rng, exp_id):
         def train_setup(rng):
@@ -121,10 +124,16 @@ def make_train(config):
                             b2=config["beta_2"],
                         ),
                     )
-                if config["optimizer"] == "rmsprop":
+                elif config["optimizer"] == "myano":
                     return optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
-                        optax.rmsprop(learning_rate=lr_schedule, eps=1e-5),
+                        myano(
+                            learning_rate=lr_schedule,
+                            eps=1e-5,
+                            b1=config["beta_1"],
+                            b2=config["beta_2"],
+                            gamma=config["myano_gamma"],
+                        ),
                     )
                 if config["optimizer"] == "sgd":
                     return optax.chain(
@@ -258,7 +267,7 @@ def make_train(config):
                 _env_step,
                 runner_state,
                 None,
-                config["num_update_steps"],
+                config["num_steps_per_env_per_update"],
             )
 
             # advantages
@@ -278,7 +287,10 @@ def make_train(config):
                         transition.reward,
                     )
                     delta = reward + config["gamma"] * next_value * (1 - done) - value
-                    gae = delta + config["gamma"] * config["gae_lambda"] * (1 - done) * gae
+                    gae = (
+                        delta
+                        + config["gamma"] * config["gae_lambda"] * (1 - done) * gae
+                    )
                     return (gae, value), gae
 
                 _, advantages = jax.lax.scan(
@@ -318,7 +330,9 @@ def make_train(config):
                         return x.reshape(-1, *x.shape[3:])
 
                 batch_reshaped = jax.tree_util.tree_map(_reshape_batch, batch)
-                permutation = jax.random.permutation(_rng_permute, config["batch_shuffle_dim"])
+                permutation = jax.random.permutation(
+                    _rng_permute, config["batch_shuffle_dim"]
+                )
                 batch_shuffled = jax.tree_util.tree_map(
                     lambda x: jnp.take(x, permutation, axis=0), batch_reshaped
                 )
@@ -376,8 +390,12 @@ def make_train(config):
                             value - traj_minibatch.value
                         ).clip(-config["clip_eps"], config["clip_eps"])
                         value_loss = jnp.square(value - targets_minibatch)
-                        value_loss_clipped = jnp.square(value_pred_clipped - targets_minibatch)
-                        value_loss = 0.5 * jnp.maximum(value_loss, value_loss_clipped).mean()
+                        value_loss_clipped = jnp.square(
+                            value_pred_clipped - targets_minibatch
+                        )
+                        value_loss = (
+                            0.5 * jnp.maximum(value_loss, value_loss_clipped).mean()
+                        )
                         return value_loss, {"value_loss": value_loss}
 
                     actor_grad_fn = jax.value_and_grad(_actor_loss, has_aux=True)
@@ -395,8 +413,12 @@ def make_train(config):
                     )
 
                     total_loss_scalar = actor_loss_val + critic_loss_val
-                    updated_actor_state = actor_train_state.apply_gradients(grads=actor_grads)
-                    updated_critic_state = critic_train_state.apply_gradients(grads=critic_grads)
+                    updated_actor_state = actor_train_state.apply_gradients(
+                        grads=actor_grads
+                    )
+                    updated_critic_state = critic_train_state.apply_gradients(
+                        grads=critic_grads
+                    )
 
                     cos_sim_a = cosine_similarity(actor_grads, running_grad_actor)
                     cos_sim_c = cosine_similarity(critic_grads, running_grad_critic)
@@ -412,10 +434,18 @@ def make_train(config):
                         **critic_aux,
                         "grad_norm_actor": pytree_norm(actor_grads),
                         "grad_norm_critic": pytree_norm(critic_grads),
-                        "mu_norm_actor": pytree_norm(updated_actor_state.opt_state[1][0].mu),
-                        "mu_norm_critic": pytree_norm(updated_critic_state.opt_state[1][0].mu),
-                        "nu_norm_actor": pytree_norm(updated_actor_state.opt_state[1][0].nu),
-                        "nu_norm_critic": pytree_norm(updated_critic_state.opt_state[1][0].nu),
+                        "mu_norm_actor": pytree_norm(
+                            updated_actor_state.opt_state[1][0].mu
+                        ),
+                        "mu_norm_critic": pytree_norm(
+                            updated_critic_state.opt_state[1][0].mu
+                        ),
+                        "nu_norm_actor": pytree_norm(
+                            updated_actor_state.opt_state[1][0].nu
+                        ),
+                        "nu_norm_critic": pytree_norm(
+                            updated_critic_state.opt_state[1][0].nu
+                        ),
                         "cosine_similarity_actor": cos_sim_a,
                         "cosine_similarity_critic": cos_sim_c,
                         "cosine_similarity_mu_actor": cos_sim_mu_a,
@@ -496,7 +526,9 @@ def make_train(config):
                 new_len = timestep_carry + 1
                 return_at_done = jnp.where(done, new_return, 0.0)
                 len_at_done = jnp.where(done, new_len.astype(jnp.float32), 0.0)
-                next_partial = jnp.where(done, jnp.zeros_like(partial_return), new_return)
+                next_partial = jnp.where(
+                    done, jnp.zeros_like(partial_return), new_return
+                )
                 next_timestep = jnp.where(done, jnp.zeros_like(timestep_carry), new_len)
                 return (next_partial, next_timestep), (return_at_done, len_at_done)
 
@@ -615,7 +647,9 @@ def main(config):
             // config["num_steps_per_env_per_update"]
         )
         config["num_gradient_steps"] = (
-            config["num_update_steps"] * config["num_epochs"] * config["num_minibatches"]
+            config["num_update_steps"]
+            * config["num_epochs"]
+            * config["num_minibatches"]
         )
 
         rng = jax.random.PRNGKey(config["seed"])
@@ -628,8 +662,12 @@ def main(config):
         print("Compile finished...")
 
         # wandb
-        job_type = f"{config['job_type']}_{config['env_name']}"
-        group = config["job_type"] + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
+        job_type = f"{config['job_type']}_{config['env_name']}_{config['optimizer']}"
+        if config["optimizer"] == "myano":
+            job_type += f"_gamma_{config['myano_gamma']}"
+        group = config["job_type"] + datetime.datetime.now().strftime(
+            "_%Y-%m-%d_%H-%M-%S"
+        )
         global LOGGER
         LOGGER = WandbMultiLogger(
             project=config["project"],

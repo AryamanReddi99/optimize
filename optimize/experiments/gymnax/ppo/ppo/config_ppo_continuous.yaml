@@ -13,7 +13,8 @@ num_minibatches: 5
 "fc_dim_size": 128
 "scale_clip_eps": False
 
-"optimizer": "adam" # adam, rmsprop, sgd — applied to both actor and critic
+"optimizer": "myano" # adam, rmsprop, sgd, myano — applied to both actor and critic
+"myano_gamma": 0.5
 "lr_actor": 2e-3
 "lr_critic": 4e-3
 "anneal_lr": True
