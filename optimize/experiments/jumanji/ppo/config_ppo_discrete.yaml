@@ -1,0 +1,36 @@
+# Run from repo root with JAX + Jumanji in env, e.g.:
+#   conda run -n adam python -m optimize.experiments.jumanji.ppo.ppo_discrete
+# or: cd optimize/experiments/jumanji/ppo && conda run -n adam python ppo_discrete.py
+
+total_timesteps: 1e7
+num_envs: 16
+num_steps_per_env_per_update: 1000
+num_epochs: 64
+num_minibatches: 4
+
+"gamma": 0.99
+"gae_lambda": 0.95
+"clip_eps": 0.2
+"ent_coef": 0.003
+"vf_coef": 0.5
+"activation": "relu"
+"fc_dim_size": 128
+"scale_clip_eps": False
+
+"optimizer": "adam" # adam, rmsprop, sgd, myano — applied to both actor and critic
+"myano_gamma": 0.5
+"lr_actor": 4e-3
+"lr_critic": 4e-3
+"anneal_lr": True
+"max_grad_norm": 1.0
+"beta_1": 0.9
+"beta_2": 0.999
+
+env_name: "Snake-v1"
+seed: 0
+num_seeds: 5
+
+# wandb
+project: optimize
+job_type: ppo
+wandb: True
