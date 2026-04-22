@@ -17,8 +17,8 @@ num_minibatches: 4
 "fc_dim_size": 128
 "scale_clip_eps": False
 
-"optimizer": "adam" # adam, rmsprop, sgd, myano — applied to both actor and critic
-"myano_gamma": 0.5
+"optimizer": "myano" # adam, rmsprop, sgd, myano — applied to both actor and critic
+"myano_gamma": 1.0
 "lr_actor": 4e-3
 "lr_critic": 4e-3
 "anneal_lr": True
@@ -26,11 +26,11 @@ num_minibatches: 4
 "beta_1": 0.9
 "beta_2": 0.999
 
-env_name: "Snake-v1"
+env_name: "Maze-v0"
 seed: 0
 num_seeds: 5
 
 # wandb
 project: optimize
 job_type: ppo
-wandb: True
+use_wandb: True

@@ -652,7 +652,7 @@ def main(config):
             group=group,
             job_type=job_type,
             config=config,
-            mode=(lambda: "online" if config["wandb"] else "disabled")(),
+            mode=(lambda: "online" if config["use_wandb"] else "disabled")(),
             seed=config["seed"],
             num_seeds=config["num_seeds"],
         )
