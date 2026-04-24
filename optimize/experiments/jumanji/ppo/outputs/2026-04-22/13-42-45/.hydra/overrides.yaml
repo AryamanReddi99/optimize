@@ -1,0 +1,4 @@
+- env_name=PacMan-v1
+- optimizer=myano
+- myano_gamma=1.0
+- beta_2=0.92

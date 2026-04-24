@@ -1,0 +1,4 @@
+- env_name=Sokoban-v0
+- optimizer=myano
+- myano_gamma=0.0
+- beta_2=0.92
