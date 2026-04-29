@@ -10,7 +10,7 @@ from flax.training.train_state import TrainState
 from typing import Any, NamedTuple
 from omegaconf import OmegaConf
 import datetime
-from optimize.optimizers.optimizers import myano
+from optimize.optimizers.optimizers import myano, cautious_adam, cautious_double_adam
 from optimize.utils.wandb_multilogger import WandbMultiLogger
 from optimize.networks.mlp import ActorContinuous, CriticContinuous
 from optimize.utils.typing import BoolArray, FloatArray, IntArray, PRNGKeyArray
@@ -124,6 +124,27 @@ def make_train(config):
                             b2=config["beta_2"],
                         ),
                     )
+                elif config["optimizer"] == "cautious_adam":
+                    return optax.chain(
+                        optax.clip_by_global_norm(config["max_grad_norm"]),
+                        cautious_adam(
+                            learning_rate=lr_schedule,
+                            eps=1e-5,
+                            b1=config["beta_1"],
+                            b2=config["beta_2"],
+                        ),
+                    )
+                elif config["optimizer"] == "cautious_double_adam":
+                    return optax.chain(
+                        optax.clip_by_global_norm(config["max_grad_norm"]),
+                        cautious_double_adam(
+                            learning_rate=lr_schedule,
+                            eps=1e-5,
+                            b11=config["beta_1"],
+                            b12=config["beta_12"],
+                            b2=config["beta_2"],
+                        ),
+                    )
                 elif config["optimizer"] == "myano":
                     return optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
@@ -134,11 +155,6 @@ def make_train(config):
                             b2=config["beta_2"],
                             gamma=config["myano_gamma"],
                         ),
-                    )
-                if config["optimizer"] == "sgd":
-                    return optax.chain(
-                        optax.clip_by_global_norm(config["max_grad_norm"]),
-                        optax.sgd(learning_rate=lr_schedule),
                     )
                 raise ValueError(f"Unknown optimizer: {config['optimizer']}")
 
@@ -664,7 +680,10 @@ def main(config):
         print("Compile finished...")
 
         # wandb
-        job_type = f"{config['job_type']}_{config['env_name']}_{config['optimizer']}"
+        job_type = f"{config['job_type']}_{config['env_name']}_{config['optimizer']}_b1{config['beta_1']}"
+        if config["optimizer"] == "cautious_double_adam":
+            job_type += f"_b12{config['beta_12']}"
+        job_type += f"_b2{config['beta_2']}"
         if config["optimizer"] == "myano":
             job_type += f"_gamma_{config['myano_gamma']}"
         group = config["job_type"] + datetime.datetime.now().strftime(
@@ -676,7 +695,7 @@ def main(config):
             group=group,
             job_type=job_type,
             config=config,
-            mode=(lambda: "online" if config["wandb"] else "disabled")(),
+            mode=(lambda: "online" if config["use_wandb"] else "disabled")(),
             seed=config["seed"],
             num_seeds=config["num_seeds"],
         )

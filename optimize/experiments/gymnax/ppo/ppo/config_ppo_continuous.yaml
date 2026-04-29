@@ -7,19 +7,20 @@ num_minibatches: 5
 "gamma": 0.99
 "gae_lambda": 0.95
 "clip_eps": 0.2
-"ent_coef": 0.0
+"ent_coef": 0.003
 "vf_coef": 0.5
 "activation": "relu"
 "fc_dim_size": 128
 "scale_clip_eps": False
 
-"optimizer": "myano" # adam, rmsprop, sgd, myano — applied to both actor and critic
-"myano_gamma": 0.5
+"optimizer": "adam" # adam, cautious_adam, cautious_double_adam, myano — applied to both actor and critic
+"myano_gamma": 1.0
 "lr_actor": 2e-3
 "lr_critic": 4e-3
 "anneal_lr": True
-"max_grad_norm": 1e10
+"max_grad_norm": 1.0
 "beta_1": 0.9
+"beta_12": 0.5
 "beta_2": 0.999
 
 env_name: "MountainCarContinuous-v0"
@@ -31,4 +32,4 @@ project: optimize
 job_type: ppo
 save_model: False
 models_dir: "/home/aryaman/Desktop/project-optimize/optimize/optimize/experiments/gymnax/ppo/ppo/models"
-wandb: True
+use_wandb: True

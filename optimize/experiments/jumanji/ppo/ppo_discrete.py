@@ -12,14 +12,21 @@ from flax.training.train_state import TrainState
 from typing import Any, NamedTuple
 from omegaconf import OmegaConf
 import datetime
-from optimize.optimizers.optimizers import myano
+from optimize.optimizers.optimizers import myano, cautious_adam, cautious_double_adam
 from optimize.utils.wandb_multilogger import WandbMultiLogger
-from optimize.networks.mlp import ActorDiscrete, CriticDiscrete
+from optimize.networks.mlp import (
+    ActorContinuous,
+    ActorDiscrete,
+    ActorMultiDiscrete,
+    CriticContinuous,
+    CriticDiscrete,
+)
 from optimize.utils.typing import BoolArray, FloatArray, IntArray, PRNGKeyArray
 import numpy as np
 import optax
 import jumanji
 import jax.tree_util as jtu
+from jumanji.specs import DiscreteArray, MultiDiscreteArray
 from jumanji.types import StepType
 from optimize.utils.jax_utils import pytree_norm, cosine_similarity
 import pickle
@@ -31,7 +38,9 @@ LOGGER: Any = None
 def flatten_observation_batched(obs: Any) -> jax.Array:
     """Pytree with leading batch dim on each leaf → (batch, feat)."""
     leaves, _ = jtu.tree_flatten(obs)
-    return jnp.concatenate([jnp.reshape(leaf, (leaf.shape[0], -1)) for leaf in leaves], axis=-1)
+    return jnp.concatenate(
+        [jnp.reshape(leaf, (leaf.shape[0], -1)) for leaf in leaves], axis=-1
+    )
 
 
 def flatten_observation_single(obs: Any) -> jax.Array:
@@ -41,8 +50,13 @@ def flatten_observation_single(obs: Any) -> jax.Array:
 
 
 class Transition(NamedTuple):
+    """Rollout transition.
+
+    ``action`` is integer indices for scalar discrete envs, else floats shaped ``(..., action_dim)``.
+    """
+
     obs: FloatArray
-    action: IntArray
+    action: FloatArray
     log_prob: FloatArray
     reward: FloatArray
     done: BoolArray
@@ -65,6 +79,25 @@ class RunnerState(NamedTuple):
     rng: PRNGKeyArray
 
 
+def infer_policy_from_action_spec(action_spec):
+    """Return policy kind and constructor argument.
+
+    - ``(\"continuous\", action_dim:int)`` — diagonal Gaussian.
+    - ``(\"discrete\", num_logits:int)`` — scalar ``DiscreteArray``.
+    - ``(\"multi_discrete\", tuple[int, ...])`` — ``MultiDiscreteArray`` (independent softmax per dim).
+    """
+    dt = jnp.dtype(action_spec.dtype)
+    if jnp.issubdtype(dt, jnp.floating):
+        action_dim = int(np.prod(action_spec.shape))
+        return "continuous", action_dim
+    if isinstance(action_spec, DiscreteArray):
+        return "discrete", int(action_spec.num_values)
+    if isinstance(action_spec, MultiDiscreteArray):
+        nv = tuple(int(x) for x in np.asarray(action_spec.num_values).tolist())
+        return "multi_discrete", nv
+    raise ValueError(f"Unsupported action_spec: {action_spec!r}")
+
+
 class Updatestate(NamedTuple):
     actor_train_state: TrainState
     critic_train_state: TrainState
@@ -79,10 +112,14 @@ class Updatestate(NamedTuple):
 def make_train(config):
     # Jumanji: registry returns the env only (no separate params object).
     env = jumanji.make(config["env_name"])
-    num_actions = int(env.action_spec.num_values)
+    policy_kind, policy_spec = infer_policy_from_action_spec(env.action_spec)
+    config["_policy_continuous"] = policy_kind == "continuous"
+    config["_policy_kind"] = policy_kind
 
     # config
-    config["batch_shuffle_dim"] = config["num_steps_per_env_per_update"] * config["num_envs"]
+    config["batch_shuffle_dim"] = (
+        config["num_steps_per_env_per_update"] * config["num_envs"]
+    )
 
     def train(rng, exp_id):
         def train_setup(rng):
@@ -122,6 +159,27 @@ def make_train(config):
                             b2=config["beta_2"],
                         ),
                     )
+                elif config["optimizer"] == "cautious_adam":
+                    return optax.chain(
+                        optax.clip_by_global_norm(config["max_grad_norm"]),
+                        cautious_adam(
+                            learning_rate=lr_schedule,
+                            eps=1e-5,
+                            b1=config["beta_1"],
+                            b2=config["beta_2"],
+                        ),
+                    )
+                elif config["optimizer"] == "cautious_double_adam":
+                    return optax.chain(
+                        optax.clip_by_global_norm(config["max_grad_norm"]),
+                        cautious_double_adam(
+                            learning_rate=lr_schedule,
+                            eps=1e-5,
+                            b11=config["beta_1"],
+                            b12=config["beta_12"],
+                            b2=config["beta_2"],
+                        ),
+                    )
                 elif config["optimizer"] == "myano":
                     return optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
@@ -133,7 +191,7 @@ def make_train(config):
                             gamma=config["myano_gamma"],
                         ),
                     )
-                if config["optimizer"] == "sgd":
+                elif config["optimizer"] == "sgd":
                     return optax.chain(
                         optax.clip_by_global_norm(config["max_grad_norm"]),
                         optax.sgd(learning_rate=lr_schedule),
@@ -143,15 +201,36 @@ def make_train(config):
             tx_actor = make_tx(lr_schedule_actor)
             tx_critic = make_tx(lr_schedule_critic)
 
-            actor = ActorDiscrete(
-                action_dim=num_actions,
-                activation=config["activation"],
-                hidden_dim=config["fc_dim_size"],
-            )
-            critic = CriticDiscrete(
-                activation=config["activation"],
-                hidden_dim=config["fc_dim_size"],
-            )
+            if policy_kind == "continuous":
+                actor = ActorContinuous(
+                    action_dim=policy_spec,
+                    activation=config["activation"],
+                    hidden_dim=config["fc_dim_size"],
+                )
+                critic = CriticContinuous(
+                    activation=config["activation"],
+                    hidden_dim=config["fc_dim_size"],
+                )
+            elif policy_kind == "multi_discrete":
+                actor = ActorMultiDiscrete(
+                    num_values=policy_spec,
+                    activation=config["activation"],
+                    hidden_dim=config["fc_dim_size"],
+                )
+                critic = CriticDiscrete(
+                    activation=config["activation"],
+                    hidden_dim=config["fc_dim_size"],
+                )
+            else:
+                actor = ActorDiscrete(
+                    action_dim=policy_spec,
+                    activation=config["activation"],
+                    hidden_dim=config["fc_dim_size"],
+                )
+                critic = CriticDiscrete(
+                    activation=config["activation"],
+                    hidden_dim=config["fc_dim_size"],
+                )
             rng, _rng_a, _rng_c = jax.random.split(rng, 3)
             init_x = jnp.zeros(obs.shape)
             actor_params = actor.init(_rng_a, init_x)
@@ -225,8 +304,14 @@ def make_train(config):
                 rng, _rng_action = jax.random.split(rng)
                 pi = actor.apply(actor_train_state.params, obs)
                 value = critic.apply(critic_train_state.params, obs)
-                action = pi.sample(seed=_rng_action)
-                log_prob = pi.log_prob(action)
+                pk = config["_policy_kind"]
+                if pk == "multi_discrete":
+                    action_parts = pi.sample(seed=_rng_action)
+                    action = jnp.stack(action_parts, axis=-1)
+                    log_prob = pi.log_prob(action_parts)
+                else:
+                    action = pi.sample(seed=_rng_action)
+                    log_prob = pi.log_prob(action)
 
                 # step: (state, action) → (next_state, timestep); no RNG in step
                 new_state, ts = jax.vmap(env.step)(state, action)
@@ -241,7 +326,7 @@ def make_train(config):
 
                 transition = Transition(
                     obs=obs,
-                    action=action.squeeze(),
+                    action=action,
                     log_prob=log_prob,
                     reward=reward,
                     done=done,
@@ -290,7 +375,10 @@ def make_train(config):
                         transition.reward,
                     )
                     delta = reward + config["gamma"] * next_value * (1 - done) - value
-                    gae = delta + config["gamma"] * config["gae_lambda"] * (1 - done) * gae
+                    gae = (
+                        delta
+                        + config["gamma"] * config["gae_lambda"] * (1 - done) * gae
+                    )
                     return (gae, value), gae
 
                 _, advantages = jax.lax.scan(
@@ -326,11 +414,15 @@ def make_train(config):
                         return x.reshape(-1)
                     elif x.ndim == 3:
                         return x.reshape(-1, *x.shape[2:])
+                    elif x.ndim == 4:
+                        return x.reshape(-1, *x.shape[2:])
                     else:
                         return x.reshape(-1, *x.shape[3:])
 
                 batch_reshaped = jax.tree_util.tree_map(_reshape_batch, batch)
-                permutation = jax.random.permutation(_rng_permute, config["batch_shuffle_dim"])
+                permutation = jax.random.permutation(
+                    _rng_permute, config["batch_shuffle_dim"]
+                )
                 batch_shuffled = jax.tree_util.tree_map(
                     lambda x: jnp.take(x, permutation, axis=0), batch_reshaped
                 )
@@ -350,7 +442,16 @@ def make_train(config):
 
                     def _actor_loss(actor_params, traj_minibatch, gae_minibatch):
                         pi = actor.apply(actor_params, traj_minibatch.obs)
-                        log_prob = pi.log_prob(traj_minibatch.action)
+                        pk = config["_policy_kind"]
+                        if pk == "multi_discrete":
+                            log_prob = pi.log_prob(
+                                tuple(
+                                    traj_minibatch.action[..., i]
+                                    for i in range(traj_minibatch.action.shape[-1])
+                                )
+                            )
+                        else:
+                            log_prob = pi.log_prob(traj_minibatch.action)
                         logratio = log_prob - traj_minibatch.log_prob
                         ratio = jnp.exp(logratio)
                         gae_minibatch = (gae_minibatch - gae_minibatch.mean()) / (
@@ -388,8 +489,12 @@ def make_train(config):
                             value - traj_minibatch.value
                         ).clip(-config["clip_eps"], config["clip_eps"])
                         value_loss = jnp.square(value - targets_minibatch)
-                        value_loss_clipped = jnp.square(value_pred_clipped - targets_minibatch)
-                        value_loss = 0.5 * jnp.maximum(value_loss, value_loss_clipped).mean()
+                        value_loss_clipped = jnp.square(
+                            value_pred_clipped - targets_minibatch
+                        )
+                        value_loss = (
+                            0.5 * jnp.maximum(value_loss, value_loss_clipped).mean()
+                        )
                         return value_loss, {"value_loss": value_loss}
 
                     actor_grad_fn = jax.value_and_grad(_actor_loss, has_aux=True)
@@ -407,32 +512,68 @@ def make_train(config):
                     )
 
                     total_loss_scalar = actor_loss_val + critic_loss_val
-                    updated_actor_state = actor_train_state.apply_gradients(grads=actor_grads)
-                    updated_critic_state = critic_train_state.apply_gradients(grads=critic_grads)
+                    updated_actor_state = actor_train_state.apply_gradients(
+                        grads=actor_grads
+                    )
+                    updated_critic_state = critic_train_state.apply_gradients(
+                        grads=critic_grads
+                    )
 
-                    # cos_sim_a = cosine_similarity(actor_grads, running_grad_actor)
-                    # cos_sim_c = cosine_similarity(critic_grads, running_grad_critic)
-                    # cos_sim_mu_a = cosine_similarity(
-                    #     actor_grads, updated_actor_state.opt_state[1][0].mu
-                    # )
-                    # cos_sim_mu_c = cosine_similarity(
-                    #     critic_grads, updated_critic_state.opt_state[1][0].mu
-                    # )
+                    cos_sim_a = cosine_similarity(actor_grads, running_grad_actor)
+                    cos_sim_c = cosine_similarity(critic_grads, running_grad_critic)
 
-                    aux = {
-                        **actor_aux,
-                        **critic_aux,
-                        "grad_norm_actor": pytree_norm(actor_grads),
-                        "grad_norm_critic": pytree_norm(critic_grads),
-                        "mu_norm_actor": pytree_norm(updated_actor_state.opt_state[1][0].mu),
-                        "mu_norm_critic": pytree_norm(updated_critic_state.opt_state[1][0].mu),
-                        "nu_norm_actor": pytree_norm(updated_actor_state.opt_state[1][0].nu),
-                        "nu_norm_critic": pytree_norm(updated_critic_state.opt_state[1][0].nu),
-                        # "cosine_similarity_actor": cos_sim_a,
-                        # "cosine_similarity_critic": cos_sim_c,
-                        # "cosine_similarity_mu_actor": cos_sim_mu_a,
-                        # "cosine_similarity_mu_critic": cos_sim_mu_c,
-                    }
+                    _oa = updated_actor_state.opt_state[1][0]
+                    _oc = updated_critic_state.opt_state[1][0]
+
+                    if config["optimizer"] == "cautious_double_adam":
+                        cos_sim_mu_a = cosine_similarity(actor_grads, _oa.mu)
+                        cos_sim_mu_c = cosine_similarity(critic_grads, _oc.mu)
+                        cos_sim_mu2_a = cosine_similarity(actor_grads, _oa.mu2)
+                        cos_sim_mu2_c = cosine_similarity(critic_grads, _oc.mu2)
+                        aux = {
+                            **actor_aux,
+                            **critic_aux,
+                            "grad_norm_actor": pytree_norm(actor_grads),
+                            "grad_norm_critic": pytree_norm(critic_grads),
+                            "mu_norm_actor": pytree_norm(_oa.mu),
+                            "mu_norm_critic": pytree_norm(_oc.mu),
+                            "mu2_norm_actor": pytree_norm(_oa.mu2),
+                            "mu2_norm_critic": pytree_norm(_oc.mu2),
+                            "nu_norm_actor": pytree_norm(_oa.nu),
+                            "nu_norm_critic": pytree_norm(_oc.nu),
+                            "cosine_similarity_actor": cos_sim_a,
+                            "cosine_similarity_critic": cos_sim_c,
+                            "cosine_similarity_mu_actor": cos_sim_mu_a,
+                            "cosine_similarity_mu_critic": cos_sim_mu_c,
+                            "cosine_similarity_mu2_actor": cos_sim_mu2_a,
+                            "cosine_similarity_mu2_critic": cos_sim_mu2_c,
+                        }
+                    elif config["optimizer"] == "sgd":
+                        aux = {
+                            **actor_aux,
+                            **critic_aux,
+                            "grad_norm_actor": pytree_norm(actor_grads),
+                            "grad_norm_critic": pytree_norm(critic_grads),
+                            "cosine_similarity_actor": cos_sim_a,
+                            "cosine_similarity_critic": cos_sim_c,
+                        }
+                    else:
+                        cos_sim_mu_a = cosine_similarity(actor_grads, _oa.mu)
+                        cos_sim_mu_c = cosine_similarity(critic_grads, _oc.mu)
+                        aux = {
+                            **actor_aux,
+                            **critic_aux,
+                            "grad_norm_actor": pytree_norm(actor_grads),
+                            "grad_norm_critic": pytree_norm(critic_grads),
+                            "mu_norm_actor": pytree_norm(_oa.mu),
+                            "mu_norm_critic": pytree_norm(_oc.mu),
+                            "nu_norm_actor": pytree_norm(_oa.nu),
+                            "nu_norm_critic": pytree_norm(_oc.nu),
+                            "cosine_similarity_actor": cos_sim_a,
+                            "cosine_similarity_critic": cos_sim_c,
+                            "cosine_similarity_mu_actor": cos_sim_mu_a,
+                            "cosine_similarity_mu_critic": cos_sim_mu_c,
+                        }
 
                     total_loss = (total_loss_scalar, aux)
 
@@ -508,7 +649,9 @@ def make_train(config):
                 new_len = timestep_carry + 1
                 return_at_done = jnp.where(done, new_return, 0.0)
                 len_at_done = jnp.where(done, new_len.astype(jnp.float32), 0.0)
-                next_partial = jnp.where(done, jnp.zeros_like(partial_return), new_return)
+                next_partial = jnp.where(
+                    done, jnp.zeros_like(partial_return), new_return
+                )
                 next_timestep = jnp.where(done, jnp.zeros_like(timestep_carry), new_len)
                 return (next_partial, next_timestep), (return_at_done, len_at_done)
 
@@ -629,7 +772,9 @@ def main(config):
             // config["num_steps_per_env_per_update"]
         )
         config["num_gradient_steps"] = (
-            config["num_update_steps"] * config["num_epochs"] * config["num_minibatches"]
+            config["num_update_steps"]
+            * config["num_epochs"]
+            * config["num_minibatches"]
         )
 
         rng = jax.random.PRNGKey(config["seed"])
@@ -642,10 +787,15 @@ def main(config):
         print("Compile finished...")
 
         # wandb
-        job_type = f"{config['job_type']}_{config['env_name']}_{config['optimizer']}"
+        job_type = f"{config['job_type']}_{config['env_name']}_{config['optimizer']}_b1{config['beta_1']}"
+        if config["optimizer"] == "cautious_double_adam":
+            job_type += f"_b12{config['beta_12']}"
+        job_type += f"_b2{config['beta_2']}"
         if config["optimizer"] == "myano":
             job_type += f"_gamma_{config['myano_gamma']}"
-        group = config["job_type"] + datetime.datetime.now().strftime("_%Y-%m-%d_%H-%M-%S")
+        group = config["job_type"] + datetime.datetime.now().strftime(
+            "_%Y-%m-%d_%H-%M-%S"
+        )
         global LOGGER
         LOGGER = WandbMultiLogger(
             project=config["project"],
@@ -661,7 +811,8 @@ def main(config):
         print("Running...")
         out = jax.block_until_ready(train_vjit(rng_seeds, exp_ids))
     finally:
-        LOGGER.finish()
+        if LOGGER is not None:
+            LOGGER.finish()
         print("Finished.")
 
 

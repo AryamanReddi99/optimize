@@ -3,10 +3,10 @@
 # or: cd optimize/experiments/jumanji/ppo && conda run -n adam python ppo_discrete.py
 
 total_timesteps: 1e7
-num_envs: 16
+num_envs: 20
 num_steps_per_env_per_update: 1000
-num_epochs: 64
-num_minibatches: 4
+num_epochs: 5
+num_minibatches: 5
 
 "gamma": 0.99
 "gae_lambda": 0.95
@@ -17,16 +17,20 @@ num_minibatches: 4
 "fc_dim_size": 128
 "scale_clip_eps": False
 
-"optimizer": "myano" # adam, rmsprop, sgd, myano — applied to both actor and critic
-"myano_gamma": 1.0
-"lr_actor": 4e-3
+"optimizer": "cautious_double_adam" # adam, cautious_adam, cautious_double_adam, myano, sgd — applied to both actor and critic
+"myano_gamma": 0.0
+"lr_actor": 2e-3
 "lr_critic": 4e-3
 "anneal_lr": True
 "max_grad_norm": 1.0
 "beta_1": 0.9
+"beta_12": 0.8
 "beta_2": 0.999
 
-env_name: "Maze-v0"
+env_name: "Minesweeper-v0"
+# Action layout is inferred: scalar DiscreteArray → softmax policy;
+# MultiDiscreteArray → independent logits per dim (`ActorMultiDiscrete`);
+# floating BoundedArray → diagonal Gaussian (`ActorContinuous`).
 seed: 0
 num_seeds: 5
 

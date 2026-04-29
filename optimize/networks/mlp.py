@@ -1,9 +1,9 @@
 import flax.linen as nn
-from typing import Sequence, NamedTuple, Dict
+from typing import Sequence, Tuple
 from flax.linen.initializers import constant, orthogonal
 import numpy as np
 import jax.numpy as jnp
-from distrax import Categorical, MultivariateNormalDiag
+from distrax import Categorical, Joint, MultivariateNormalDiag
 
 
 def _activation_fn(name: str):
@@ -40,7 +40,9 @@ class ActorContinuous(nn.Module):
             bias_init=constant(0.0),
         )(h)
         h = activation(h)
-        mean = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(h)
+        mean = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(h)
         # State-independent log_std (common in PPO; stable-baselines3-style).
         log_std = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
         log_std = jnp.clip(log_std, -20.0, 2.0)
@@ -68,7 +70,9 @@ class CriticContinuous(nn.Module):
             bias_init=constant(0.0),
         )(critic)
         critic = activation(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            critic
+        )
         return jnp.squeeze(critic, axis=-1)
 
 
@@ -122,6 +126,41 @@ class ActorDiscrete(nn.Module):
         return Categorical(logits=actor_mean)
 
 
+class ActorMultiDiscrete(nn.Module):
+    """Independent categoricals over each dimension (Jumanji ``MultiDiscreteArray``)."""
+
+    num_values: Tuple[int, ...]
+    activation: str = "tanh"
+    hidden_dim: int = 64
+
+    @nn.compact
+    def __call__(self, x):
+        activation = _activation_fn(self.activation)
+        actor_mean = nn.Dense(
+            self.hidden_dim,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(x)
+        actor_mean = activation(actor_mean)
+        actor_mean = nn.Dense(
+            self.hidden_dim,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+        )(actor_mean)
+        actor_mean = activation(actor_mean)
+        flat = nn.Dense(
+            sum(self.num_values),
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+        )(actor_mean)
+        cats = []
+        pos = 0
+        for nv in self.num_values:
+            cats.append(Categorical(logits=flat[:, pos : pos + nv]))
+            pos += nv
+        return Joint(tuple(cats))
+
+
 class CriticDiscrete(nn.Module):
     """Critic network"""
 
@@ -143,7 +182,9 @@ class CriticDiscrete(nn.Module):
             bias_init=constant(0.0),
         )(critic)
         critic = activation(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
+            critic
+        )
         return jnp.squeeze(critic, axis=-1)
 
 
