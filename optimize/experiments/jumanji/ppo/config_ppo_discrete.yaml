@@ -17,7 +17,7 @@ num_minibatches: 5
 "fc_dim_size": 128
 "scale_clip_eps": False
 
-"optimizer": "cautious_double_adam" # adam, cautious_adam, cautious_double_adam, myano, sgd — applied to both actor and critic
+"optimizer": "myano" # adam, cautious_adam, cautious_double_adam, myano, sgd — applied to both actor and critic
 "myano_gamma": 0.0
 "lr_actor": 2e-3
 "lr_critic": 4e-3
